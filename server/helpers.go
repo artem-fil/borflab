@@ -54,7 +54,23 @@ func imageInfo(imgBytes []byte) (mime string, width, height, size int, err error
 }
 
 func resizeAndConvert(file io.Reader, maxDim int) ([]byte, error) {
-	img, _, err := image.Decode(file)
+	imgBytes, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+
+	mime := http.DetectContentType(imgBytes)
+
+	if mime == "image/jpeg" {
+		cfg, _, err := image.DecodeConfig(bytes.NewReader(imgBytes))
+		if err == nil {
+			if cfg.Width <= maxDim && cfg.Height <= maxDim {
+				return imgBytes, nil
+			}
+		}
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(imgBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -77,8 +93,7 @@ func resizeAndConvert(file io.Reader, maxDim int) ([]byte, error) {
 	}
 
 	buf := new(bytes.Buffer)
-	err = jpeg.Encode(buf, img, &jpeg.Options{Quality: 90})
-	if err != nil {
+	if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: 90}); err != nil {
 		return nil, fmt.Errorf("cannot encode JPEG: %w", err)
 	}
 

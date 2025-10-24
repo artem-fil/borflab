@@ -157,6 +157,12 @@ func (m *Middleware) RequireAuth(next func(*Responder, *http.Request)) http.Hand
 			return
 		}
 
+		if id, ok := strings.CutPrefix(claims.Id, "did:privy:"); ok {
+			rw.UserId = id
+		} else {
+			rw.UserId = claims.Id
+		}
+
 		ctx := context.WithValue(r.Context(), "claims", *claims)
 
 		next(rw, r.WithContext(ctx))
@@ -259,7 +265,7 @@ func (m *Middleware) Logging(next http.Handler) http.Handler {
 }
 
 func (m *Middleware) Wrap(next http.Handler) http.Handler {
-	return m.CORS(m.PanicRecovery(m.Logging(next)))
+	return m.CORS(m.PanicRecovery(next))
 }
 
 func Claims(r *http.Request) (PrivyClaims, bool) {

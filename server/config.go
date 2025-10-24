@@ -20,12 +20,20 @@ type TelegramConfig struct {
 type PrivyConfig struct {
 	AppId           string
 	VerificationKey string
+	Wallet          string
+}
+
+type ApiConfig struct {
+	PinataKey    string
+	PinataSecret string
+	PinataToken  string
 }
 
 type Config struct {
 	DB          DBConfig
 	Telegram    TelegramConfig
 	Privy       PrivyConfig
+	Api         ApiConfig
 	OpenAIToken string
 	Port        string
 	Environment string
@@ -48,11 +56,27 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	pinataKey, err := requireEnv("PINATA_KEY")
+	if err != nil {
+		return nil, err
+	}
+	pinataSecret, err := requireEnv("PINATA_SECRET")
+	if err != nil {
+		return nil, err
+	}
+	pinataToken, err := requireEnv("PINATA_TOKEN")
+	if err != nil {
+		return nil, err
+	}
 	privyAppID, err := requireEnv("PRIVY_APP_ID")
 	if err != nil {
 		return nil, err
 	}
 	privyKey, err := requireEnv("PRIVY_VERIFICATION_KEY")
+	if err != nil {
+		return nil, err
+	}
+	privyWallet, err := requireEnv("PRIVY_WALLET")
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +107,12 @@ func LoadConfig() (*Config, error) {
 		Privy: PrivyConfig{
 			VerificationKey: privyKey,
 			AppId:           privyAppID,
+			Wallet:          privyWallet,
+		},
+		Api: ApiConfig{
+			PinataKey:    pinataKey,
+			PinataSecret: pinataSecret,
+			PinataToken:  pinataToken,
 		},
 		OpenAIToken: openAIToken,
 		Port:        port,

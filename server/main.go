@@ -49,12 +49,7 @@ func main() {
 
 	api := NewApi(cfg, db, telegram)
 
-	mux := http.NewServeMux()
-
-	mux.Handle("/ping", mddlwr.RequireAuth(api.Ping))
-	mux.Handle("/analyze", mddlwr.RequireAuth(api.AnalyzeSpecimen))
-	mux.Handle("/progress", mddlwr.RequireAuth(api.Progress))
-	mux.Handle("/users/sync", mddlwr.RequireAuth(api.SyncUser))
+	mux := NewRouter(mddlwr, api)
 
 	server := mddlwr.Wrap(mux)
 

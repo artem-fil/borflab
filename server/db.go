@@ -121,7 +121,7 @@ returning
 	return &inserted, nil
 }
 
-func (db *DB) UpdateExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
+func (db *DB) AnalyzeExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
 	result, err := db.Conn.ExecContext(
 		ctx,
 		`
@@ -138,16 +138,33 @@ where id = $3
 	return result, err
 }
 
-func (db *DB) FinishExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
+func (db *DB) GenerateExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
 	result, err := db.Conn.ExecContext(
 		ctx,
 		`
 update experiments set
-    output_image = $1,
-    finished = $2
-where id = $3`,
-		e.OutputImage,
-		e.Finished,
+    generated = $1
+where id = $2`,
+		e.Generated,
+		e.Id,
+	)
+
+	return result, err
+}
+
+func (db *DB) UploadExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
+	result, err := db.Conn.ExecContext(
+		ctx,
+		`
+update experiments set
+    output_image_cid = $1,
+    output_metadata_cid = $2,
+	uploaded = $3
+where id = $4
+        `,
+		e.OutputImageCid,
+		e.OutputMetadataCid,
+		e.Uploaded,
 		e.Id,
 	)
 

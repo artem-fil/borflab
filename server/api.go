@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 const (
 	OpenAICompletionURL = "https://api.openai.com/v1/chat/completions"
 	OpenAIGenerationURL = "https://api.openai.com/v1/images/generations"
+	PinataPinFileUrl    = "https://api.pinata.cloud/pinning/pinFileToIPFS"
 )
 
 var (
@@ -137,7 +140,9 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		return
 	}
 
-	go a.processImage(taskID, resizedImg, insertedExperiment.Id)
+	wallet, _ := claims.Wallet()
+
+	go a.processImage(taskID, resizedImg, insertedExperiment.Id, wallet)
 
 	response := struct {
 		Id string
@@ -147,7 +152,7 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 	w.Send(response)
 }
 
-func (a *api) processImage(taskID string, imgBytes []byte, experimentId int) {
+func (a *api) processImage(taskID string, imgBytes []byte, experimentId int, wallet string) {
 
 	update := func(p int) {
 		if t, ok := tasks.Load(taskID); ok {
@@ -155,11 +160,15 @@ func (a *api) processImage(taskID string, imgBytes []byte, experimentId int) {
 		}
 	}
 	fail := func(msg string, err error) {
-		if t, ok := tasks.Load(taskID); ok {
+		if task, ok := tasks.Load(taskID); ok {
 			LogError("API", msg, err)
-			t.(*TaskStatus).Error = msg
-			t.(*TaskStatus).Done = true
-			t.(*TaskStatus).Progress = 100
+			if t, ok := task.(*TaskStatus); ok {
+				t.Error = msg
+				t.Done = true
+				t.Progress = 100
+			} else {
+				LogError("API", "cannot cast TaskStatus", err)
+			}
 		}
 	}
 
@@ -258,7 +267,6 @@ func (a *api) processImage(taskID string, imgBytes []byte, experimentId int) {
 		fail("malformed json response", err)
 		return
 	}
-
 	if t, ok := tasks.Load(taskID); ok {
 		t.(*TaskStatus).Done = true
 		var parsed map[string]any
@@ -281,18 +289,27 @@ func (a *api) processImage(taskID string, imgBytes []byte, experimentId int) {
 			Analyzed: &analyzed,
 		}
 
-		_, err = a.db.UpdateExperiment(context.Background(), &experiment)
+		_, err = a.db.AnalyzeExperiment(context.Background(), &experiment)
 		if err != nil {
-			fail("cannot continue experiment", nil)
+			fail("cannot continue experiment", err)
 			return
 		}
 
 		t.(*TaskStatus).Progress = 100
 		t.(*TaskStatus).Result = parsed
 
-		if prompt, ok := parsed["RENDER_DIRECTIVE"]; ok {
-			t.(*TaskStatus).NextTaskId = uuid.NewString()
-			go a.generateImage(taskID, prompt.(string), experimentId)
+		prompt, promptOk := parsed["RENDER_DIRECTIVE"]
+		profile, profileOk := parsed["MONSTER_PROFILE"].(map[string]any)
+		name, nameOk := profile["name"]
+
+		if promptOk && profileOk && nameOk {
+			nextTask := uuid.NewString()
+			tasks.Store(nextTask, &TaskStatus{
+				Progress: 0,
+				Done:     false,
+			})
+			t.(*TaskStatus).NextTaskId = nextTask
+			go a.generateImage(nextTask, prompt.(string), name.(string), experimentId, wallet)
 		} else {
 			fail("cannot get render directive", nil)
 			return
@@ -310,7 +327,82 @@ func (a *api) Progress(w *Responder, r *http.Request) {
 	}
 }
 
-func (a *api) generateImage(taskID string, prompt string, experimentId int) {
+func (a *api) Mint(w *Responder, r *http.Request) {
+	taskId := Param(r)
+
+	if t, ok := tasks.Load(taskId); ok {
+		if task, ok := t.(*TaskStatus); ok {
+			if task.Done != true {
+				a.InternalError(w, fmt.Errorf("task %v is not done", taskId))
+				return
+			}
+
+			if base64Image, ok := task.Result.(string); ok && base64Image != "" {
+				imageCid, err := uploadImageToPinata(a.cfg.Api.PinataToken, base64Image, name)
+				if err != nil {
+					a.InternalError(w, fmt.Errorf("cannot upload image to ipfs", err))
+					return
+				}
+				metadata := map[string]any{
+					"name":   name,
+					"symbol": "MON",
+					"image":  fmt.Sprintf("ipfs://%s", imageCid),
+					"properties": map[string]any{
+						"creators": []map[string]any{
+							{
+								"address":  a.cfg.Privy.Wallet,
+								"share":    90,
+								"verified": true,
+							},
+							{
+								"address":  userWallet,
+								"share":    10,
+								"verified": false,
+							},
+						},
+						"files": []map[string]any{
+							{
+								"uri":  fmt.Sprintf("ipfs://%s", imageCid),
+								"type": "image/png",
+							},
+						},
+					},
+				}
+
+				metadataCid, err := uploadMetadataToPinata(a.cfg.Api.PinataToken, metadata)
+				if err != nil {
+					a.InternalError(w, fmt.Errorf("cannot upload metadata to ipfs", err))
+					return
+				}
+
+				uploaded := time.Now().UTC()
+				experiment := Experiment{
+					Id:                experimentId,
+					OutputImageCid:    imageCid,
+					OutputMetadataCid: metadataCid,
+					Uploaded:          &uploaded,
+				}
+
+				_, err = a.db.UploadExperiment(context.Background(), &experiment)
+				if err != nil {
+					a.DbError(w, fmt.Errorf("cannot update experiment", err))
+					return
+				}
+			} else {
+				a.InternalError(w, fmt.Errorf("task %v result is invalid", taskId))
+				return
+			}
+
+		} else {
+			a.InternalError(w, fmt.Errorf("cannot cast %v into TaskStatus", taskId))
+			return
+		}
+	} else {
+		a.InternalError(w, fmt.Errorf("cannot find task %v", taskId))
+	}
+}
+
+func (a *api) generateImage(taskID string, prompt string, name string, experimentId int) {
 
 	update := func(p int) {
 		if t, ok := tasks.Load(taskID); ok {
@@ -327,12 +419,12 @@ func (a *api) generateImage(taskID string, prompt string, experimentId int) {
 	}
 
 	requestBody := map[string]any{
-		"model":           "gpt-image-1",
-		"n":               1,
-		"size":            "1024x1536",
-		"quality":         "medium",
-		"prompt":          prompt,
-		"response_format": "url",
+		"model":      "gpt-image-1",
+		"n":          1,
+		"size":       "1024x1536",
+		"quality":    "medium",
+		"prompt":     prompt,
+		"moderation": "low",
 	}
 
 	bodyBytes, err := json.Marshal(requestBody)
@@ -357,7 +449,7 @@ func (a *api) generateImage(taskID string, prompt string, experimentId int) {
 	req.Header.Set("Authorization", "Bearer "+a.cfg.OpenAIToken)
 
 	doneChan := make(chan struct{})
-	go simulateProgress(taskID, 2, 98, 60*time.Second, doneChan)
+	go simulateProgress(taskID, 2, 99, 50*time.Second, doneChan)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -377,14 +469,12 @@ func (a *api) generateImage(taskID string, prompt string, experimentId int) {
 		return
 	}
 	close(doneChan)
-	update(99)
 
 	if t, ok := tasks.Load(taskID); ok {
-		t.(*TaskStatus).Done = true
 
 		var parsed struct {
 			Data []struct {
-				URL string `json:"url"`
+				B64JSON string `json:"b64_json"`
 			} `json:"data"`
 		}
 
@@ -394,26 +484,28 @@ func (a *api) generateImage(taskID string, prompt string, experimentId int) {
 			return
 		}
 
-		t.(*TaskStatus).Progress = 100
 		if len(parsed.Data) > 0 {
-			imageURL := parsed.Data[0].URL
+			base64Image := parsed.Data[0].B64JSON
 
-			finished := time.Now().UTC()
+			generated := time.Now().UTC()
 			experiment := Experiment{
-				Id:          experimentId,
-				OutputImage: imageURL,
-				Finished:    &finished,
+				Id:        experimentId,
+				Generated: &generated,
 			}
-			_, err = a.db.UpdateExperiment(context.Background(), &experiment)
+
+			_, err = a.db.GenerateExperiment(context.Background(), &experiment)
 			if err != nil {
-				fail("cannot finish experiment", nil)
+				fail("cannot generate experiment", err)
 				return
 			}
-			t.(*TaskStatus).Result = imageURL
+
+			t.(*TaskStatus).Result = base64Image
+			t.(*TaskStatus).Progress = 100
 		} else {
-			fail("cannot get render directive", nil)
+			fail("cannot render result", nil)
 			return
 		}
+		t.(*TaskStatus).Done = true
 	}
 }
 
@@ -471,4 +563,118 @@ func simulateProgress(taskID string, from, to int, duration time.Duration, done 
 			}
 		}
 	}
+}
+
+func uploadImageToPinata(pinataJWT string, base64Image string, fileName string) (string, error) {
+
+	imageData, err := base64.StdEncoding.DecodeString(base64Image)
+	if err != nil {
+		return "", err
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	// TODO: bulletproof extension and filename
+	part, err := writer.CreateFormFile("file", fmt.Sprintf("%s.png", fileName))
+	if err != nil {
+		return "", err
+	}
+	_, err = part.Write(imageData)
+	if err != nil {
+		return "", err
+	}
+	writer.Close()
+
+	req, err := http.NewRequest("POST", PinataPinFileUrl, body)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+pinataJWT)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Pinata API refused %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var parsed struct {
+		IpfsHash  string `json:"IpfsHash"`
+		PinSize   int    `json:"PinSize"`
+		Timestamp string `json:"Timestamp"`
+	}
+	err = json.Unmarshal(respBody, &parsed)
+	if err != nil {
+		return "", err
+	}
+
+	return parsed.IpfsHash, nil
+}
+
+func uploadMetadataToPinata(pinataJWT string, metadata map[string]any) (string, error) {
+
+	jsonBytes, err := json.Marshal(metadata)
+	if err != nil {
+		return "", err
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	part, err := writer.CreateFormFile("file", "metadata.json")
+	if err != nil {
+		return "", err
+	}
+
+	_, err = part.Write(jsonBytes)
+	if err != nil {
+		return "", err
+	}
+
+	writer.Close()
+
+	req, err := http.NewRequest("POST", PinataPinFileUrl, body)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+pinataJWT)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Pinata API refused %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var parsed struct {
+		IpfsHash string `json:"IpfsHash"`
+	}
+	err = json.Unmarshal(respBody, &parsed)
+	if err != nil {
+		return "", err
+	}
+
+	return parsed.IpfsHash, nil
 }

@@ -10,6 +10,7 @@ import (
 type Responder struct {
 	http.ResponseWriter
 	StatusCode int
+	UserId     string
 }
 
 type ResponseError struct {
@@ -52,6 +53,7 @@ func (rw *Responder) sendError(code int, msg ...string) {
 	if len(msg) > 0 && msg[0] != "" {
 		text = msg[0]
 	}
+	rw.StatusCode = code
 	rw.JSON(ResponseError{Error: text}, code)
 }
 

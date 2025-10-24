@@ -23,9 +23,13 @@ create table if not exists experiments (
     
     specimen jsonb,
 
-    output_image text,
+    output_image_cid text,
+    output_metadata_cid text,
+    output_metadata jsonb,
     
     created timestamptz default now(),
-    prompted timestamptz,
-    finished timestamptz
+    analyzed timestamptz,
+    generated timestamptz,
+    uploaded timestamptz,
+    minted timestamptz
 );
