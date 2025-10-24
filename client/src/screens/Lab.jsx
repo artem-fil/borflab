@@ -10,6 +10,7 @@ export default function Lab() {
     const [specimen, setSpecimen] = useState(null);
     const [biome, setBiome] = useState("");
     const [analyzeResult, setAnalyzeResult] = useState(null);
+    const [nextTask, setNextTask] = useState(null);
 
     const next = () => setCurrent((p) => (p + 1) % slides.length);
 
@@ -31,6 +32,8 @@ export default function Lab() {
                             setBiome={setBiome}
                             analyzeResult={analyzeResult}
                             setAnalyzeResult={setAnalyzeResult}
+                            nextTask={nextTask}
+                            setNextTask={setNextTask}
                         />
                     </div>
                 ))}

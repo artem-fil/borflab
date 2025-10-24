@@ -1,5 +1,7 @@
-import { Routes, Route, useLocation } from "react-router-dom";
-import { usePrivy } from "@privy-io/react-auth";
+import { Routes, Route, useLocation, Link } from "react-router-dom";
+import { usePrivy, useIdentityToken } from "@privy-io/react-auth";
+import { useEffect } from "react";
+
 import Signup from "./screens/Signup";
 import Home from "./screens/Home";
 import Welcome from "./screens/Welcome";
@@ -8,14 +10,21 @@ import Library from "./screens/Library";
 import Storage from "./screens/Storage";
 import Lab from "./screens/Lab";
 import NavMenu from "./components/NavMenu";
-import { Link } from "react-router-dom";
+
+import store from "./store";
 
 export default function App() {
     const { ready, authenticated } = usePrivy();
+    const { identityToken } = useIdentityToken();
     const location = useLocation();
-    if (!ready) {
-        return <div className="text-black text-center mt-10">Loading...</div>;
-    }
+
+    useEffect(() => {
+        if (ready && authenticated && identityToken) {
+            store.setToken(identityToken);
+        } else {
+            store.clear();
+        }
+    }, [ready, authenticated, identityToken]);
 
     const bgMap = {
         "/library": "bg-orange-100",
@@ -26,6 +35,10 @@ export default function App() {
 
     const synced = localStorage.getItem("synced") === "true";
     const syncedAndAuthenticated = authenticated && synced;
+
+    if (!ready) {
+        return <div className="text-black text-center mt-10">Loading...</div>;
+    }
 
     return (
         <div

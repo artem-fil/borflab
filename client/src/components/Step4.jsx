@@ -3,42 +3,22 @@ import posterImg from "../assets/poster.png";
 import printerImg from "../assets/printer.png";
 import cardbackImg from "../assets/card-back.png";
 import cardfrontImg from "../assets/card-front.png";
+import api from "../api";
+import { useNavigate } from "react-router-dom";
 
-export default function Step4({ analyzeResult, specimen, biome }) {
+export default function Step4({ specimen, biome, analyzeResult, nextTask }) {
     const [done, setDone] = useState(false);
+    const navigate = useNavigate();
     const frontCardRef = useRef(null);
     const backCardRef = useRef(null);
     const printerIndicatorRef = useRef(null);
     const outputImageRef = useRef(null);
 
     useEffect(() => {
-        if (!analyzeResult) return;
-        startGenerate();
-    }, [analyzeResult]);
+        if (!nextTask) return;
 
-    const isProd = !document.location.hostname.endsWith("localhost");
-    const baseUrl = isProd ? "https://borflab.com/api" : "http://127.0.0.1:8282/api";
-
-    async function startGenerate() {
-        try {
-            const resp = await fetch(`${baseUrl}/borf-generate`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt: analyzeResult["RENDER_DIRECTIVE"] }),
-            });
-
-            if (resp.ok) {
-                const { Id } = await resp.json();
-                pollGenerateProgress(Id);
-            } else {
-                const t = await resp.text();
-                alert(t);
-            }
-        } catch (err) {
-            console.error("Analyze error", err);
-            alert("Network error starting analysis");
-        }
-    }
+        pollGenerateProgress(nextTask);
+    }, [nextTask]);
 
     async function pollGenerateProgress(generateTaskId) {
         let pollingCancelled = false;
@@ -49,43 +29,42 @@ export default function Step4({ analyzeResult, specimen, biome }) {
 
         async function poll() {
             try {
-                const res = await fetch(`${baseUrl}/borf-progress/${generateTaskId}`);
-                if (!res.ok) throw new Error("Bad response");
-
-                const { progress, done, result } = await res.json();
-
+                const { progress, done, result, error } = await api.progress(generateTaskId);
                 if (backCardRef.current) {
                     backCardRef.current.style.bottom = `-${progress}%`;
                 }
 
-                setDone(done);
-
+                if (error) {
+                    clearTimeout(timeout);
+                    throw error;
+                }
                 if (done) {
+                    setDone(done);
                     clearTimeout(timeout);
 
-                    if ("Error" in result) {
-                        alert(result["Error"]);
-                    } else {
-                        let src = `data:image/png;base64,${result.data[0].b64_json}`;
-
-                        if (frontCardRef.current) {
-                            // плавно заезжает на место
-                            frontCardRef.current.style.bottom = `0`;
-                        }
-
-                        if (printerIndicatorRef.current) {
-                            printerIndicatorRef.current.style.animation = "none";
-                        }
-                        if (outputImageRef.current) {
-                            outputImageRef.current.setAttribute("src", src);
-                        }
+                    if (frontCardRef.current) {
+                        frontCardRef.current.style.bottom = `0`;
+                        frontCardRef.current.addEventListener("click", async () => {
+                            const { monsterId } = await api.mint(generateTaskId);
+                            navigate(`/viewer/${monsterId}`);
+                        });
                     }
-                } else {
+
+                    if (printerIndicatorRef.current) {
+                        printerIndicatorRef.current.style.animation = "none";
+                    }
+                    if (outputImageRef.current) {
+                        outputImageRef.current.setAttribute("src", `data:image/png;base64,${result}`);
+                    }
+                }
+
+                if (!done) {
                     if (!pollingCancelled) {
                         setTimeout(poll, 1500);
                     }
                 }
             } catch (err) {
+                alert(err);
                 console.error("Polling error:", err);
                 clearTimeout(timeout);
             }

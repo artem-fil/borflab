@@ -2,45 +2,29 @@ import { usePrivy } from "@privy-io/react-auth";
 import { useNavigate } from "react-router-dom";
 import privyLogo from "../assets/privy.jpg";
 import { useState, useEffect } from "react";
-import { useIdentityToken } from "@privy-io/react-auth";
+import api from "../api";
+import store from "../store";
 
 export default function Signup() {
     const { login, authenticated, user, logout } = usePrivy();
     const navigate = useNavigate();
-    const { identityToken } = useIdentityToken();
     const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState("");
 
-    const isProd = !document.location.hostname.endsWith("localhost");
-    const baseUrl = isProd ? "https://borflab.com/api" : "http://127.0.0.1:8282";
-
     const handleSync = async () => {
+        if (syncing) return;
+
         setSyncing(true);
         setError("");
 
         try {
-            const response = await fetch(`${baseUrl}/users/sync`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${identityToken}`,
-                },
-                body: JSON.stringify({
-                    id: user.id,
-                    email: user.email?.address,
-                    wallet: user.wallet?.address,
-                }),
-            });
-
-            if (response.ok) {
-                localStorage.setItem("synced", "true");
-                navigate("/");
-            } else {
-                throw new Error(`API error: ${response.statusText}`);
-            }
+            await api.syncUser(user);
+            localStorage.setItem("synced", "true");
+            navigate("/");
         } catch (err) {
             console.error("Sync error:", err);
             setError(err.message || "Sync failed. Try again");
+            store.clear();
             localStorage.removeItem("synced");
             await logout();
         } finally {

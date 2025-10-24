@@ -1,26 +1,29 @@
 import { useState, useEffect, useRef } from "react";
 import posterImg from "../assets/poster.png";
 import analyzerImg from "../assets/analyzer.png";
-import { useIdentityToken } from "@privy-io/react-auth";
+import api from "../api";
 
-export default function Step3({ next, specimen, biome, setAnalyzeResult }) {
-    const { identityToken } = useIdentityToken();
+export default function Step3({ next, specimen, biome, setAnalyzeResult, setNextTask }) {
     const [displayed, setDisplayed] = useState("");
     const [progress, setProgress] = useState(0);
     const typingRef = useRef(false);
     const monitorRef = useRef(null);
     const abortControllerRef = useRef(null);
 
-    const isProd = !document.location.hostname.endsWith("localhost");
-    const baseUrl = isProd ? "https://borflab.com/api" : "http://127.0.0.1:8282";
-
     useEffect(() => {
         return () => {
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
-            }
+            abortControllerRef.current?.abort();
         };
     }, []);
+
+    useEffect(() => {
+        if (!specimen || !biome) return;
+
+        abortControllerRef.current?.abort();
+        abortControllerRef.current = new AbortController();
+
+        startAnalyze();
+    }, [specimen, biome]);
 
     useEffect(() => {
         const el = monitorRef.current;
@@ -29,94 +32,53 @@ export default function Step3({ next, specimen, biome, setAnalyzeResult }) {
         }
     }, [displayed]);
 
-    useEffect(() => {
-        if (!specimen || !biome) return;
-        startAnalyze();
-    }, [specimen, biome]);
-
     async function startAnalyze() {
-        abortControllerRef.current = new AbortController();
-
         try {
             const formData = new FormData();
             formData.append("file", dataURLtoFile(specimen, "specimen.jpg"));
             formData.append("biome", biome);
-
-            const response = await fetch(`${baseUrl}/analyze`, {
-                method: "POST",
-                body: formData,
-                signal: abortControllerRef.current.signal,
-                headers: {
-                    Authorization: `Bearer ${identityToken}`,
-                },
-            });
-
-            if (!response.ok) {
-                let message;
-                try {
-                    const { error } = await response.json();
-                    message = `${response.statusText}: ${error}`;
-                } catch {
-                    message = `Network error: ${response.statusText}`;
-                }
-                throw message;
-            } else {
-                const { Id } = await response.json();
-                pollAnalyzeProgress(Id);
-            }
+            const { Id } = await api.analyze(formData, abortControllerRef.current?.signal);
+            pollAnalyzeProgress(Id);
         } catch (err) {
-            await appendTypedLine(`  🔴 ${err}`);
+            await appendTypedLine(`  🔴 ${err.message || err}`);
             await appendTypedLine(" Please, try again.");
         }
     }
 
     async function pollAnalyzeProgress(analyzeTaskId) {
-        const BASE_DELAY = 2000;
+        const BASE_DELAY = 1500;
         let currentStep = 0;
 
         const timeout = setTimeout(() => {
-            appendTypedLine(" ⏰ Analysis timeout: process terminated");
+            appendTypedLine("Analysis timeout: process terminated");
         }, 5 * 60 * 1000);
 
         async function poll() {
             try {
-                const response = await fetch(`${baseUrl}/progress/${analyzeTaskId}`, {
-                    signal: abortControllerRef.current.signal,
-                });
-                if (!response.ok) {
-                    let message;
-                    try {
-                        const { error } = await response.json();
-                        message = `${response.statusText}: ${error}`;
-                    } catch {
-                        message = `Network error: ${response.statusText}`;
+                const { progress, done, result, nextTask, error } = await api.progress(analyzeTaskId);
+                setProgress(progress);
+                const step = Math.floor(progress / 10);
+                if (step > currentStep) {
+                    for (; currentStep < step; currentStep++) {
+                        await appendTypedLine(progressMessages[currentStep]);
                     }
-                    throw message;
-                } else {
-                    const { progress, done, result, error } = await response.json();
-                    setProgress(progress);
-                    const step = Math.floor(progress / 10);
-                    if (step > currentStep) {
-                        for (; currentStep < step; currentStep++) {
-                            await appendTypedLine(progressMessages[currentStep]);
-                        }
-                    }
-                    if (done) {
-                        clearTimeout(timeout);
-                        setAnalyzeResult(result);
-                        if (error) {
-                            throw error;
-                        } else {
-                            await appendTypedLine(" Analysis complete!");
-                            setTimeout(next, 1500);
-                        }
+                }
+                if (done) {
+                    clearTimeout(timeout);
+                    setAnalyzeResult(result);
+                    setNextTask(nextTask);
+                    if (error) {
+                        throw error;
                     } else {
-                        setTimeout(poll, BASE_DELAY);
+                        await appendTypedLine(" Analysis complete!");
+                        setTimeout(next, 1500);
                     }
+                } else {
+                    setTimeout(poll, BASE_DELAY);
                 }
             } catch (err) {
                 clearTimeout(timeout);
-                console.log(err);
+                console.error(err);
                 await appendTypedLine(`  🔴 ${err}`);
                 await appendTypedLine(" Please, try again.");
             }
