@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { PrivyProvider } from "@privy-io/react-auth";
+import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 import "./index.css";
 import App from "./App.jsx";
 
@@ -12,10 +13,25 @@ createRoot(document.getElementById("root")).render(
         <PrivyProvider
             appId={appId}
             config={{
-                loginMethods: ["email", "wallet"],
+                loginMethods: ["email"],
                 embeddedWallets: {
-                    ethereum: {
+                    solana: {
                         createOnLogin: "users-without-wallets",
+                    },
+                    defaultChain: "solana:devnet",
+                },
+                walletConnect: {
+                    solana: {
+                        rpcUrl: "https://api.devnet.solana.com",
+                        chainId: "devnet",
+                    },
+                },
+                solana: {
+                    rpcs: {
+                        "solana:devnet": {
+                            rpc: createSolanaRpc("https://api.devnet.solana.com"),
+                            // rpcSubscriptions: createSolanaRpcSubscriptions("wss://api.devnet.solana.com"),
+                        },
                     },
                 },
             }}

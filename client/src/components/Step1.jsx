@@ -3,10 +3,29 @@ import posterImg from "../assets/poster.png";
 import igniterImg from "../assets/igniter.png";
 import placeholderImg from "../assets/placeholder.svg";
 
-export default function Step1({ next, setSpecimen }) {
+import agateImage from "../assets/agate.png";
+import jadeImage from "../assets/jade.png";
+import topazImage from "../assets/topaz.png";
+import quartzImage from "../assets/quartz.png";
+import sapphireImage from "../assets/sapphire.png";
+import amazoniteImage from "../assets/amazonite.png";
+import rubyImage from "../assets/ruby.png";
+
+const STONES = [
+    { id: "agate", name: "Agate", image: agateImage },
+    { id: "sapphire", name: "Sapphire", image: sapphireImage },
+    { id: "ruby", name: "Ruby", image: rubyImage },
+    { id: "quartz", name: "Quartz", image: quartzImage },
+    { id: "amazonite", name: "Amazonite", image: amazoniteImage },
+    { id: "jade", name: "Jade", image: jadeImage },
+    { id: "topaz", name: "Topaz", image: topazImage },
+];
+
+export default function Step1({ next, setSpecimen, stone, setStone }) {
     const fileInputRef = useRef(null);
     const [preview, setPreview] = useState(null);
     const [displayed, setDisplayed] = useState("");
+    const [showStoneDialog, setShowStoneDialog] = useState(false);
     const [index, setIndex] = useState(0);
 
     const MAX_FILE_SIZE_MB = 10;
@@ -51,6 +70,13 @@ export default function Step1({ next, setSpecimen }) {
         reader.readAsDataURL(file);
     };
 
+    const handleStoneSelect = (stone) => {
+        setStone(stone);
+        setShowStoneDialog(false);
+    };
+
+    const isNextEnabled = preview && stone;
+
     const text = "Specimen uploaded. Ready for analysis. Status: waiting for approval…";
 
     useEffect(() => {
@@ -92,14 +118,22 @@ export default function Step1({ next, setSpecimen }) {
             </div>
             <div className="relative w-full">
                 <img src={igniterImg} onClick={next} alt="igniter" className="w-full h-auto object-contain" />
+                {/* stone dialog */}
+                <div
+                    className="absolute aspect-square cursor-pointer"
+                    style={{ top: "13%", left: "13%", width: "25%" }}
+                    onClick={() => setShowStoneDialog(true)}
+                >
+                    {stone && <img src={stone.image} alt={stone.name} className="w-full h-full object-cover" />}
+                </div>
                 {/* submit */}
                 <button
                     type="button"
-                    onClick={() => preview && next()}
-                    disabled={!preview}
-                    aria-disabled={!preview}
+                    onClick={() => isNextEnabled && next()}
+                    disabled={!isNextEnabled}
+                    aria-disabled={!isNextEnabled}
                     className={`rounded-full aspect-square absolute
-            ${preview ? "animate-pulse-button" : " cursor-not-allowed"}`}
+            ${isNextEnabled ? "animate-pulse-button" : " cursor-not-allowed"}`}
                     style={{ top: "55%", left: "18%", width: "14%" }}
                 />
                 {/* monitor */}
@@ -128,6 +162,33 @@ export default function Step1({ next, setSpecimen }) {
                     <span className="animate-pulse">▋</span>
                 </div>
             </div>
+            {showStoneDialog && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-10 p-4">
+                    <div className="bg-gray-900 border border-lime-500 rounded-lg p-6 max-w-md w-full">
+                        <h3 className="text-lime-500 text-lg font-bold mb-4 text-center">SELECT STONE</h3>
+                        <div className="grid grid-cols-3 gap-4">
+                            {STONES.map(({ id, name, image }) => (
+                                <button
+                                    key={id}
+                                    onClick={() => handleStoneSelect({ id, name, image })}
+                                    className="flex flex-col items-center rounded-lg hover:border-lime-500 transition-colors"
+                                >
+                                    <div className="w-14 h-14 bg-gray-700 rounded-full mb-2 flex items-center justify-center">
+                                        <img src={image} alt="" />
+                                    </div>
+                                    <span className="text-white text-xs">{name}</span>
+                                </button>
+                            ))}
+                        </div>
+                        <button
+                            onClick={() => setShowStoneDialog(false)}
+                            className="mt-6 w-full py-2 border border-lime-500 text-lime-500 rounded-lg hover:bg-lime-500/10 transition-colors"
+                        >
+                            CANCEL
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

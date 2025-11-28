@@ -2,8 +2,66 @@ package main
 
 import (
 	"encoding/json"
+	"math/rand"
 	"time"
 )
+
+var seasonLimits = map[Rarity]int{
+	RarityCommon:    420000,
+	RarityRare:      210000,
+	RarityEpic:      109200,
+	RarityMythic:    67200,
+	RarityLegendary: 33600,
+}
+
+var stoneProbabilities = map[Stone][5]int{
+	StoneQuartz:    {50, 25, 13, 8, 4},
+	StoneTanzanite: {45, 27, 14, 9, 5},
+	StoneAgate:     {43, 26, 15, 10, 6},
+	StoneRuby:      {40, 25, 16, 11, 8},
+	StoneSapphire:  {35, 24, 18, 12, 11},
+	StoneTopaz:     {32, 22, 19, 13, 14},
+	StoneJade:      {30, 20, 20, 14, 16},
+}
+
+type Biome string
+
+const (
+	BiomeAmazonia    Biome = "amazonia"
+	BiomeAquatica    Biome = "aquatica"
+	BiomePlushlandia Biome = "plushlandia"
+	BiomeCanopica    Biome = "canopica"
+)
+
+type Rarity string
+
+const (
+	RarityCommon    Rarity = "common"
+	RarityRare      Rarity = "rare"
+	RarityEpic      Rarity = "epic"
+	RarityMythic    Rarity = "mythic"
+	RarityLegendary Rarity = "legendary"
+)
+
+type Stone string
+
+const (
+	StoneQuartz    Stone = "quartz"
+	StoneTanzanite Stone = "tanzanite"
+	StoneAgate     Stone = "agate"
+	StoneRuby      Stone = "ruby"
+	StoneSapphire  Stone = "sapphire"
+	StoneTopaz     Stone = "topaz"
+	StoneJade      Stone = "jade"
+)
+
+type RarityStats struct {
+	CommonIssued    int
+	RareIssued      int
+	EpicIssued      int
+	MythicIssued    int
+	LegendaryIssued int
+}
 
 type User struct {
 	PrivyId string
@@ -28,11 +86,13 @@ type Experiment struct {
 	ProcessedHeight int
 	ProcessedImage  []byte
 
-	Specimen json.RawMessage
-
-	OutputImageCid    string
-	OutputMetadataCid string
-	OutputMetadata    json.RawMessage
+	Specimen    json.RawMessage
+	ImageCID    string
+	MetadataCID string
+	Metadata    json.RawMessage
+	Stone       Stone
+	Biome       Biome
+	Rarity      Rarity
 
 	Created   time.Time
 	Analyzed  *time.Time
@@ -41,43 +101,95 @@ type Experiment struct {
 	Minted    *time.Time
 }
 
-type MetaplexMetadata struct {
-	Name                 string              `json:"name"`                              // required
-	Symbol               string              `json:"symbol"`                            // required: NFT ticker
-	Description          string              `json:"description,omitempty"`             // optional
-	SellerFeeBasisPoints uint16              `json:"seller_fee_basis_points,omitempty"` // optional: royalty in basis points
-	Image                string              `json:"image"`                             // required: ipfs://CID
-	ExternalURL          string              `json:"external_url,omitempty"`            // optional
-	Attributes           []MetaplexAttribute `json:"attributes,omitempty"`              // optional: for rarity/traits
-	Collection           *MetaplexCollection `json:"collection,omitempty"`              // optional
-	Properties           MetaplexProperties  `json:"properties"`                        // required for Metaplex
+func (stats *RarityStats) PickRarity(stone Stone) Rarity {
+	baseProbs, exists := stoneProbabilities[stone]
+	if !exists {
+		stone = StoneQuartz
+		baseProbs = stoneProbabilities[stone]
+	}
+
+	rarities := []Rarity{RarityCommon, RarityRare, RarityEpic, RarityMythic, RarityLegendary}
+
+	remaining := map[Rarity]int{
+		RarityCommon:    seasonLimits[RarityCommon] - stats.CommonIssued,
+		RarityRare:      seasonLimits[RarityRare] - stats.RareIssued,
+		RarityEpic:      seasonLimits[RarityEpic] - stats.EpicIssued,
+		RarityMythic:    seasonLimits[RarityMythic] - stats.MythicIssued,
+		RarityLegendary: seasonLimits[RarityLegendary] - stats.LegendaryIssued,
+	}
+
+	totalRemaining := 0
+	for _, r := range remaining {
+		totalRemaining += r
+	}
+	if totalRemaining == 0 {
+		return RarityCommon
+	}
+
+	adjustedProbs := make([]float64, len(rarities))
+	totalPool := 840000
+
+	for i, rarity := range rarities {
+		if remaining[rarity] <= 0 {
+			adjustedProbs[i] = 0
+			continue
+		}
+
+		baseProb := float64(baseProbs[i])
+		expectedRatio := float64(seasonLimits[rarity]) / float64(totalPool)
+		currentRatio := float64(remaining[rarity]) / float64(totalRemaining)
+
+		var adjustment float64
+
+		if currentRatio < expectedRatio*0.8 {
+			adjustment = 1.5
+		} else if currentRatio < expectedRatio*0.9 {
+			adjustment = 1.2
+		} else if currentRatio > expectedRatio*1.2 {
+			adjustment = 0.7
+		} else if currentRatio > expectedRatio*1.1 {
+			adjustment = 0.9
+		} else {
+			adjustment = 1.0
+		}
+
+		adjustedProbs[i] = baseProb * adjustment
+	}
+
+	totalProb := 0.0
+	for _, prob := range adjustedProbs {
+		totalProb += prob
+	}
+
+	if totalProb == 0 {
+		return getAnyAvailableRarity(remaining)
+	}
+
+	randVal := rand.Float64() * totalProb
+	cumulative := 0.0
+
+	for i, prob := range adjustedProbs {
+		cumulative += prob
+		if randVal <= cumulative {
+			return rarities[i]
+		}
+	}
+
+	return getAnyAvailableRarity(remaining)
 }
 
-type MetaplexAttribute struct {
-	TraitType   string `json:"trait_type"`             // required: attribute name
-	Value       any    `json:"value"`                  // required: attribute value
-	DisplayType string `json:"display_type,omitempty"` // optional: e.g., "number", "date"
-	MaxValue    int    `json:"max_value,omitempty"`    // optional
-	TraitCount  int    `json:"trait_count,omitempty"`  // optional
-}
+func getAnyAvailableRarity(remaining map[Rarity]int) Rarity {
 
-type MetaplexCollection struct {
-	Name   string `json:"name"`   // required: collection name
-	Family string `json:"family"` // optional: for grouping NFTs
-}
+	var available []Rarity
+	for rarity, rem := range remaining {
+		if rem > 0 {
+			available = append(available, rarity)
+		}
+	}
 
-type MetaplexProperties struct {
-	Creators []MetaplexCreator `json:"creators"` // required: array of creators
-	Files    []MetaplexFile    `json:"files"`    // required: NFT files
-}
+	if len(available) == 0 {
+		return RarityCommon
+	}
 
-type MetaplexCreator struct {
-	Address  string `json:"address"`            // required: creator's wallet address
-	Share    uint8  `json:"share"`              // required: percentage share, sum of all creators should be 100
-	Verified bool   `json:"verified,omitempty"` // optional: true if creator is verified
-}
-
-type MetaplexFile struct {
-	URI  string `json:"uri"`  // required: file link (ipfs://CID)
-	Type string `json:"type"` // required: MIME type of the file, e.g., "image/png"
+	return available[rand.Intn(len(available))]
 }

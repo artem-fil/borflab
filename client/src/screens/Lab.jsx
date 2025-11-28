@@ -8,6 +8,7 @@ export default function Lab() {
     const slides = [Step1, Step2, Step3, Step4];
     const [current, setCurrent] = useState(0);
     const [specimen, setSpecimen] = useState(null);
+    const [stone, setStone] = useState(null);
     const [biome, setBiome] = useState("");
     const [analyzeResult, setAnalyzeResult] = useState(null);
     const [nextTask, setNextTask] = useState(null);
@@ -28,6 +29,8 @@ export default function Lab() {
                             next={next}
                             specimen={specimen}
                             setSpecimen={setSpecimen}
+                            stone={stone}
+                            setStone={setStone}
                             biome={biome}
                             setBiome={setBiome}
                             analyzeResult={analyzeResult}

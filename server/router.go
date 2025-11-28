@@ -1,33 +1,98 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
 
-type Router struct {
-	mux *http.ServeMux
+type Route struct {
+	Method   string
+	Pattern  string
+	Handler  http.Handler
+	Segments []string
 }
+
+type Router struct {
+	mux    *http.ServeMux
+	routes []Route
+}
+
+type PathParamsKey struct{}
+type HandlerFunc any
 
 func NewRouter(mddlwr *Middleware, api *api) *Router {
-
 	mux := http.NewServeMux()
+	router := &Router{mux: mux}
 
-	mux.Handle("/ping", mddlwr.RequireAuth(api.Ping))
-	mux.Handle("/analyze", mddlwr.RequireAuth(api.AnalyzeSpecimen))
-	mux.Handle("/progress/", mddlwr.RequireAuth(api.Progress))
-	mux.Handle("/mint/", mddlwr.RequireAuth(api.Mint))
-	mux.Handle("/users/sync", mddlwr.RequireAuth(api.SyncUser))
+	router.Handle("GET", "/ping", mddlwr.RequireAuth(api.Ping))
+	router.Handle("POST", "/analyze", mddlwr.RequireAuth(api.AnalyzeSpecimen))
+	router.Handle("GET", "/progress/:id", mddlwr.RequireAuth(api.Progress))
+	router.Handle("POST", "/prepare/:id", mddlwr.RequireAuth(api.PrepareMint))
+	router.Handle("POST", "/users/sync", mddlwr.RequireAuth(api.SyncUser))
+	router.Handle("GET", "/mint", api.TestMint)
 
-	return &Router{mux}
+	return router
 }
 
-func (r *Router) Handle(pattern string, handler http.Handler) {
-	r.mux.Handle(pattern, handler)
+func (r *Router) Handle(method, pattern string, handler HandlerFunc) {
+	var h http.Handler
+
+	switch handler := handler.(type) {
+	case http.Handler:
+		h = handler
+	case func(http.ResponseWriter, *http.Request):
+		h = http.HandlerFunc(handler)
+	}
+
+	segments := strings.Split(strings.Trim(pattern, "/"), "/")
+
+	route := Route{
+		Method:   method,
+		Pattern:  pattern,
+		Handler:  h,
+		Segments: segments,
+	}
+
+	r.routes = append(r.routes, route)
+}
+
+func (r *Router) matchRoute(method, path string) (*Route, map[string]string) {
+	pathSegments := strings.Split(strings.Trim(path, "/"), "/")
+
+	for _, route := range r.routes {
+		if route.Method != method {
+			continue
+		}
+		if len(route.Segments) != len(pathSegments) {
+			continue
+		}
+
+		params := make(map[string]string)
+		matches := true
+		for i, routeSeg := range route.Segments {
+			pathSeg := pathSegments[i]
+
+			if strings.HasPrefix(routeSeg, ":") {
+				paramName := strings.TrimPrefix(routeSeg, ":")
+				params[paramName] = pathSeg
+			} else if routeSeg != pathSeg {
+				matches = false
+				break
+			}
+		}
+
+		if matches {
+			return &route, params
+		}
+	}
+
+	return nil, nil
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -37,12 +102,17 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		StatusCode:     http.StatusOK,
 	}
 
-	_, pattern := r.mux.Handler(req)
+	route, params := r.matchRoute(req.Method, req.URL.Path)
 
-	if pattern == "" {
+	if route == nil {
 		rw.SendNotFound()
 	} else {
-		r.mux.ServeHTTP(rw, req)
+		if len(params) > 0 {
+			ctx := context.WithValue(req.Context(), PathParamsKey{}, params)
+			req = req.WithContext(ctx)
+		}
+
+		route.Handler.ServeHTTP(rw, req)
 	}
 
 	if req.Method != http.MethodOptions {
@@ -71,6 +141,13 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 		fmt.Fprintln(os.Stdout, logLine)
 	}
+}
+
+func Params(req *http.Request) map[string]string {
+	if params, ok := req.Context().Value(PathParamsKey{}).(map[string]string); ok {
+		return params
+	}
+	return nil
 }
 
 func accessLogDuration(d time.Duration) string {

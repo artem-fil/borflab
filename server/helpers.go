@@ -99,3 +99,23 @@ func resizeAndConvert(file io.Reader, maxDim int) ([]byte, error) {
 
 	return buf.Bytes(), nil
 }
+
+func CheckStone(maybeStone string) (*Stone, error) {
+	stone := Stone(maybeStone)
+	switch stone {
+	case StoneQuartz, StoneTanzanite, StoneAgate, StoneRuby, StoneSapphire, StoneTopaz, StoneJade:
+		return &stone, nil
+	default:
+		return nil, fmt.Errorf("invalid stone: '%s'", maybeStone)
+	}
+}
+
+func CheckBiome(maybeBiome string) (*Biome, error) {
+	biome := Biome(maybeBiome)
+	switch biome {
+	case BiomeAmazonia, BiomeAquatica, BiomePlushlandia, BiomeCanopica:
+		return &biome, nil
+	default:
+		return nil, fmt.Errorf("invalid biome: '%s'", maybeBiome)
+	}
+}

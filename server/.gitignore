@@ -24,3 +24,6 @@
 
 .DS_Store
 Thumbs.db
+
+admin_keypair.json
+borflab_chain.json

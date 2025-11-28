@@ -3,7 +3,7 @@ import posterImg from "../assets/poster.png";
 import analyzerImg from "../assets/analyzer.png";
 import api from "../api";
 
-export default function Step3({ next, specimen, biome, setAnalyzeResult, setNextTask }) {
+export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, setNextTask }) {
     const [displayed, setDisplayed] = useState("");
     const [progress, setProgress] = useState(0);
     const typingRef = useRef(false);
@@ -17,13 +17,13 @@ export default function Step3({ next, specimen, biome, setAnalyzeResult, setNext
     }, []);
 
     useEffect(() => {
-        if (!specimen || !biome) return;
+        if (!specimen || !biome || !stone) return;
 
         abortControllerRef.current?.abort();
         abortControllerRef.current = new AbortController();
 
         startAnalyze();
-    }, [specimen, biome]);
+    }, [specimen, biome, stone]);
 
     useEffect(() => {
         const el = monitorRef.current;
@@ -37,6 +37,7 @@ export default function Step3({ next, specimen, biome, setAnalyzeResult, setNext
             const formData = new FormData();
             formData.append("file", dataURLtoFile(specimen, "specimen.jpg"));
             formData.append("biome", biome);
+            formData.append("stone", stone.id);
             const { Id } = await api.analyze(formData, abortControllerRef.current?.signal);
             pollAnalyzeProgress(Id);
         } catch (err) {

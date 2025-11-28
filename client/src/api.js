@@ -77,7 +77,12 @@ export default {
         return request(`/progress/${taskId}`);
     },
 
-    async mint(analyzeTaskId) {
-        return request(`/progress/${analyzeTaskId}`);
+    async prepareMint(taskId, userPublicKey) {
+        return request(`/prepare/${taskId}`, {
+            method: "POST",
+            body: {
+                userPublicKey,
+            },
+        });
     },
 };

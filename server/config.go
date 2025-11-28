@@ -23,7 +23,16 @@ type PrivyConfig struct {
 	Wallet          string
 }
 
-type ApiConfig struct {
+type SolanaConfig struct {
+	AdminPublicKey            string
+	ProgramId                 string
+	StoneCollection           string
+	CardCollection            string
+	CollectionUpdateAuthority string
+	TreasuryPda               string
+}
+
+type PinataConfig struct {
 	PinataKey    string
 	PinataSecret string
 	PinataToken  string
@@ -33,7 +42,8 @@ type Config struct {
 	DB          DBConfig
 	Telegram    TelegramConfig
 	Privy       PrivyConfig
-	Api         ApiConfig
+	Solana      SolanaConfig
+	Pinata      PinataConfig
 	OpenAIToken string
 	Port        string
 	Environment string
@@ -80,6 +90,11 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	solanaProgramId, err := requireEnv("SOLANA_PROGRAM_ID")
+	if err != nil {
+		return nil, err
+	}
+
 	telegramEnabled := requireEnvBool("TELEGRAM_ENABLED", false)
 	telegramToken, err := requireEnv("TELEGRAM_TOKEN")
 	if err != nil {
@@ -109,7 +124,10 @@ func LoadConfig() (*Config, error) {
 			AppId:           privyAppID,
 			Wallet:          privyWallet,
 		},
-		Api: ApiConfig{
+		Solana: SolanaConfig{
+			ProgramId: solanaProgramId,
+		},
+		Pinata: PinataConfig{
 			PinataKey:    pinataKey,
 			PinataSecret: pinataSecret,
 			PinataToken:  pinataToken,

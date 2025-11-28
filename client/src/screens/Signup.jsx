@@ -32,7 +32,7 @@ export default function Signup() {
         }
     };
     useEffect(() => {
-        if (authenticated && user) {
+        if (authenticated && user && user.wallet && user.wallet.address) {
             handleSync();
         }
     }, [authenticated, user]);

@@ -11,12 +11,6 @@ import (
 	_ "github.com/lib/pq"
 )
 
-type App struct {
-	db       *DB
-	cfg      *Config
-	telegram *Telegram
-}
-
 func main() {
 	log.SetFlags(0)
 
@@ -52,6 +46,11 @@ func main() {
 	mux := NewRouter(mddlwr, api)
 
 	server := mddlwr.Wrap(mux)
+
+	_ = NewSolanaListener(
+		cfg.Solana.ProgramId,
+		func(msg string) { LogInfo("Solana", msg) },
+	)
 
 	LogInfo("Main", fmt.Sprintf("🚀 Server started on %s", cfg.Port))
 	LogError("Main", "ListenAndServe", http.ListenAndServe(":"+cfg.Port, server))

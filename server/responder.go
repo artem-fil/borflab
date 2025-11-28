@@ -6,7 +6,6 @@ import (
 	"net/http"
 )
 
-// ====== Responder ======
 type Responder struct {
 	http.ResponseWriter
 	StatusCode int

@@ -60,6 +60,54 @@ returning privy_id, email, wallet, created, synced
 	return &updated, nil
 }
 
+func (db *DB) SelectExperiment(ctx context.Context, id string) (*Experiment, error) {
+	row := db.Conn.QueryRowContext(
+		ctx,
+		`
+select from experiments (
+    user_id,
+    input_mime,
+    input_size,
+    input_width,
+    input_height,
+    processed_mime,
+    processed_size,
+    processed_width,
+    processed_height,
+	stone,
+	biome,
+	specimen,
+	rarity,
+	created
+) where id = $1;`,
+		id,
+	)
+
+	experiment := &Experiment{}
+
+	if err := row.Scan(
+		&experiment.Id,
+		&experiment.UserId,
+		&experiment.InputMime,
+		&experiment.InputSize,
+		&experiment.InputWidth,
+		&experiment.InputHeight,
+		&experiment.ProcessedMime,
+		&experiment.ProcessedSize,
+		&experiment.ProcessedWidth,
+		&experiment.ProcessedHeight,
+		&experiment.Stone,
+		&experiment.Biome,
+		&experiment.Specimen,
+		&experiment.Rarity,
+		&experiment.Created,
+	); err != nil {
+		return nil, err
+	}
+
+	return experiment, nil
+}
+
 func (db *DB) InsertExperiment(ctx context.Context, e *Experiment) (*Experiment, error) {
 	row := db.Conn.QueryRowContext(
 		ctx,
@@ -74,8 +122,10 @@ insert into experiments (
     processed_size,
     processed_width,
     processed_height,
-    processed_image
-) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    processed_image,
+	stone,
+	biome
+) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 returning 
     id,
     user_id,
@@ -87,6 +137,8 @@ returning
     processed_size,
     processed_width,
     processed_height,
+	stone,
+	biome,
     created
         `,
 		e.UserId,
@@ -99,6 +151,8 @@ returning
 		e.ProcessedWidth,
 		e.ProcessedHeight,
 		e.ProcessedImage,
+		e.Stone,
+		e.Biome,
 	)
 
 	var inserted Experiment
@@ -113,6 +167,8 @@ returning
 		&inserted.ProcessedSize,
 		&inserted.ProcessedWidth,
 		&inserted.ProcessedHeight,
+		&inserted.Stone,
+		&inserted.Biome,
 		&inserted.Created,
 	); err != nil {
 		return nil, err
@@ -138,37 +194,43 @@ where id = $3
 	return result, err
 }
 
-func (db *DB) GenerateExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
+func (db *DB) FinishExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
 	result, err := db.Conn.ExecContext(
 		ctx,
 		`
 update experiments set
-    generated = $1
-where id = $2`,
+		image_cid = $1,
+		metadata_cid = $2,
+		generated = $3,
+		uploaded = $4
+where id = $5
+        `,
+		e.ImageCID,
+		e.MetadataCID,
 		e.Generated,
+		e.Uploaded,
 		e.Id,
 	)
 
 	return result, err
 }
 
-func (db *DB) UploadExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
-	result, err := db.Conn.ExecContext(
+func (db *DB) SelectRarities(ctx context.Context) (RarityStats, error) {
+	var stats RarityStats
+
+	err := db.Conn.QueryRowContext(
 		ctx,
 		`
-update experiments set
-    output_image_cid = $1,
-    output_metadata_cid = $2,
-	uploaded = $3
-where id = $4
-        `,
-		e.OutputImageCid,
-		e.OutputMetadataCid,
-		e.Uploaded,
-		e.Id,
-	)
+select 
+            count(*) filter (where rarity = 'common'),
+            count(*) filter (where rarity = 'rare'),
+            count(*) filter (where rarity = 'epic'),
+            count(*) filter (where rarity = 'mythic'),
+            count(*) filter (where rarity = 'legendary')
+        FROM monsters`,
+	).Scan(&stats.CommonIssued, &stats.RareIssued, &stats.EpicIssued, &stats.MythicIssued, &stats.LegendaryIssued)
 
-	return result, err
+	return stats, err
 }
 
 func nullable(s string) sql.NullString {
