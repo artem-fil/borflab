@@ -64,6 +64,10 @@ export default {
         });
     },
 
+    async getStones() {
+        return request("/stones");
+    },
+
     async analyze(formData, signal) {
         return request("/analyze", {
             method: "POST",
@@ -77,12 +81,10 @@ export default {
         return request(`/progress/${taskId}`);
     },
 
-    async prepareMint(taskId, userPublicKey) {
-        return request(`/prepare/${taskId}`, {
+    async prepareMint(id, body) {
+        return request(`/prepare/${id}`, {
             method: "POST",
-            body: {
-                userPublicKey,
-            },
+            body,
         });
     },
 };

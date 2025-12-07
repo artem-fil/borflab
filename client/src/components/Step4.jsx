@@ -1,4 +1,4 @@
-import { Connection, PublicKey } from "@solana/web3.js";
+import { Connection, Transaction, PublicKey } from "@solana/web3.js";
 
 import { useState, useEffect, useRef } from "react";
 import posterImg from "../assets/poster.png";
@@ -7,11 +7,14 @@ import cardbackImg from "../assets/card-back.png";
 import cardfrontImg from "../assets/card-front.png";
 import api from "../api";
 import { useNavigate } from "react-router-dom";
-import { useWallets } from "@privy-io/react-auth/solana";
+import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
+
+import { ENDPOINT } from "../config.js";
 
 export default function Step4({ specimen, stone, biome, analyzeResult, nextTask }) {
     const { wallets } = useWallets();
-
+    const { signTransaction } = useSignTransaction();
+    const solanaWallet = wallets[0];
     const [done, setDone] = useState(false);
     const [minting, setIsMinting] = useState(false);
     const navigate = useNavigate();
@@ -27,6 +30,7 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
     }, [nextTask]);
 
     async function pollGenerateProgress(generateTaskId) {
+        const BASE_DELAY = 1500;
         let pollingCancelled = false;
         const timeout = setTimeout(() => {
             pollingCancelled = true;
@@ -45,39 +49,54 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                     throw error;
                 }
                 if (done) {
-                    const { image } = result;
+                    const { image, experimentId } = result;
                     setDone(done);
                     clearTimeout(timeout);
 
                     if (frontCardRef.current) {
                         frontCardRef.current.style.bottom = `0`;
                         frontCardRef.current.addEventListener("click", async () => {
-                            if (minting) return;
-                            setIsMinting(true);
-
+                            if (minting) {
+                                return;
+                            }
                             try {
-                                console.log("🎮 Starting monster mint...");
+                                setIsMinting(true);
+                                const { TxBase64 } = await api.prepareMint(experimentId, {
+                                    userPubKey: solanaWallet.address,
+                                    stonePubKey: stone.Address,
+                                });
 
-                                if (!wallets || wallets.length === 0) {
-                                    throw new Error("Connect wallet first");
+                                console.log(TxBase64);
+
+                                function base64ToUint8Array(base64) {
+                                    const raw = atob(base64);
+                                    const array = new Uint8Array(raw.length);
+                                    for (let i = 0; i < raw.length; i++) {
+                                        array[i] = raw.charCodeAt(i);
+                                    }
+                                    return array;
                                 }
 
-                                const solanaWallet = wallets.find((w) => w.chainType === "solana");
+                                const txBytes = base64ToUint8Array(TxBase64);
+                                const transaction = Transaction.from(txBytes);
 
-                                if (!solanaWallet) {
-                                    throw new Error("Solana wallet not found");
-                                }
+                                const serializedTx = transaction.serialize({
+                                    requireAllSignatures: false,
+                                    verifySignatures: false,
+                                });
+                                const txUint8Array = new Uint8Array(serializedTx);
 
-                                const userPublicKey = new PublicKey(solanaWallet.address);
+                                const { signedTransaction } = await signTransaction({
+                                    wallet: solanaWallet,
+                                    transaction: txUint8Array,
+                                    chain: "solana:devnet",
+                                });
 
-                                const { tx } = await api.prepareMint(generateTaskId, userPublicKey);
+                                console.log("🚀 Sending transaction...");
+                                const connection = new Connection(ENDPOINT, "confirmed");
 
-                                const signedBase64 = await solanaWallet.signTransaction(tx);
+                                const txid = await connection.sendRawTransaction(signedTransaction);
 
-                                const connection = new Connection("https://api.devnet.solana.com", "confirmed");
-
-                                const rawTx = window.Buffer.from(signedBase64, "base64");
-                                const txid = await connection.sendRawTransaction(rawTx);
                                 const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(
                                     "confirmed"
                                 );
@@ -95,12 +114,14 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                                     throw new Error(`Transaction failed: ${confirmation.value.err}`);
                                 }
 
-                                console.log("Mint txid:", txid);
-
-                                navigate(`/`);
-                            } catch (error) {
-                                console.error("❌ Mint failed:", error);
-                                throw error;
+                                // === POST-MINT VERIFICATION ===
+                                console.log("✅ NFT minted successfully!");
+                                console.log("🎉 Result:");
+                                console.log(`Transaction: ${txid}`);
+                                console.log(`TX Explorer: https://explorer.solana.com/tx/${txid}?cluster=devnet`);
+                            } catch (err) {
+                                console.error("❌ Transaction failed:");
+                                console.error(err);
                             } finally {
                                 setIsMinting(false);
                             }
@@ -117,7 +138,7 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
 
                 if (!done) {
                     if (!pollingCancelled) {
-                        setTimeout(poll, 1500);
+                        setTimeout(poll, BASE_DELAY);
                     }
                 }
             } catch (err) {
@@ -156,7 +177,7 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                         <img className="absolute inset-0 w-full h-full" src={cardbackImg} alt="card back" />
                         <div className="relative p-0.5 pb-5 rounded-xl w-full h-full">
                             <div className="relative flex flex-col border-4 rounded-xl w-full outline-4 outline-orange-100 h-full border-green-800 bg-orange-100">
-                                <p className="p-1 leading-none">BORFLAB: SPECIMEN ANALYSIS LOG // DEPT:006</p>
+                                <p className="p-1 leading-none">SPECIMEN ANALYSIS LOG // DEPT:006</p>
                                 <hr className="border-0 h-0.5 bg-green-800" />
                                 <div className="flex w-full items-center">
                                     <div className="h-20 w-8/12 flex flex-col">
@@ -168,7 +189,7 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                                     </div>
                                     <div className="border-0 w-0.5 h-full bg-green-800" />
                                     <div className="py-1 w-4/12 flex flex-col gap-1">
-                                        <img src={stone?.image} className=" object-cover" alt="borfstone" />
+                                        <img src={stone?.Image} className=" object-cover" alt="borfstone" />
                                         <strong className="mx-1 text-center uppercase py-1 bg-red-800 text-white">
                                             common
                                         </strong>
@@ -178,10 +199,10 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                                 <span className="leading-none px-0.5">[BORFOLOGIST ID # PSM-0000001-25/I]</span>
                                 <hr className="border-0 h-0.5 bg-green-800" />
                                 <strong className="uppercase leading-none px-0.5">
-                                    spiral index: issue date: 19.10.2025
+                                    {`spiral index: issue date: ${new Date().toLocaleDateString()}`}
                                 </strong>
                                 <span className="uppercase leading-none px-0.5">
-                                    {`[23/840K BORF’S][3/164.4K ${stone?.name}][${biome}: 001]`}
+                                    {`[23/840K BORF’S][3/164.4K ${stone?.Type}][${biome}: 001]`}
                                 </span>
                                 <strong className="py-0.5 bg-green-800 text-white uppercase">[borf profile]</strong>
                                 <p className="leading-none px-0.5">

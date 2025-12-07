@@ -6,6 +6,23 @@ create type rarity AS enum (
   'legendary'
 );
 
+create type biome AS enum (
+  'amazonia',
+  'aquatica',
+  'plushlandia',
+  'canopica'
+);
+
+create type stone AS enum (
+    'Quartz',
+    'Amazonite',
+    'Agate',
+    'Ruby',
+    'Sapphire',
+    'Topaz',
+    'Jade'
+);
+
 create table if not exists users (
     privy_id text primary key,
     email text,
@@ -14,42 +31,112 @@ create table if not exists users (
     synced timestamptz default now()
 );
 
+create table if not exists experiments (
+  id serial primary key,
+  user_id text not null references users(privy_id) on delete cascade,
+  
+  input_mime text not null,
+  input_size int not null,
+  input_width int not null,
+  input_height int not null,
+  processed_mime text not null,
+  processed_size int not null,
+  processed_width int not null,
+  processed_height int not null,
+  processed_image bytea not null,
+  
+  specimen jsonb,
+  rarity rarity,
+  stone stone,
+  biome biome,
+  image_cid text,
+  metadata_cid text,
+  metadata jsonb,
+  
+  created timestamptz default now(),
+  analyzed timestamptz,
+  generated timestamptz,
+  uploaded timestamptz,
+  minted timestamptz
+);
+
 create table if not exists monsters (
+  id serial primary key,
+  user_id text not null references users(privy_id) on delete cascade,
+  rarity rarity not null,
+  created timestamptz default now()
+);
+
+create table if not exists stones (
     id serial primary key,
     user_id text not null references users(privy_id) on delete cascade,
-
-    rarity rarity not null,
-
-    image_cid text,
-    metadata_cid text,
-    metadata jsonb,
-    
+    mint_address varchar(44) unique not null,
+    owner_address varchar(44) not null,
+    spark_count smallint not null check (spark_count >= 0),
+    stone stone not null,
+    pda_address varchar(44) unique not null,
+    signature varchar(88) unique not null,
+    slot bigint not null,
+    minted timestamptz not null,
     created timestamptz default now()
 );
 
-create table if not exists experiments (
+create table if not exists monsters (
     id serial primary key,
     user_id text not null references users(privy_id) on delete cascade,
-    
-    input_mime text not null,
-    input_size int not null,
-    input_width int not null,
-    input_height int not null,
+    experiment_id text not null references experiments(id),
+    mint_address varchar(44) unique not null,
+    owner_address varchar(44) not null,
+    stone_mint_address varchar(44) not null,
+    card_state_address varchar(44) not null,
 
-    processed_mime text not null,
-    processed_size int not null,
-    processed_width int not null,
-    processed_height int not null,
-    processed_image bytea not null,
-    
-    specimen jsonb,
-    rarity rarity,
+    name text not null,
+    species text not null,
+    lore text not null,
+    movement_class text not null,
+    behaviour text not null,
+    personality text not null,
+    abilities text not null,
+    habitat text not null,
 
-    monster_id int references monsters(id) on delete cascade,
+    biome biome not null,
+    rarity rarity not null,
     
+    metadata_uri text not null,
+    image_cid text not null,
+
+    serial_number int not null,
+    generation smallint not null,
+    
+    signature varchar(88) unique not null,
+    slot bigint not null,
+
+    minted timestamptz not null,
+    created timestamptz default now()
+);
+
+create table solana_events (
+    id serial primary key,
+    signature text not null,
+    slot bigint not null,
+    stage text not null,
+    error text,
+    type text,
+    raw_input jsonb,
+    program_data bytea,
+    payload jsonb,
+
     created timestamptz default now(),
-    analyzed timestamptz,
-    generated timestamptz,
-    uploaded timestamptz,
-    minted timestamptz
+
+    check (stage != 'done' or payload is not null),
+
+    check (
+        (stage <> 'done' and raw_input is not null)
+        or (stage = 'done' and raw_input is null)
+    ),
+
+    check (
+        (stage <> 'done' and error is not null)
+        or (stage = 'done' and error is null)
+    )
 );

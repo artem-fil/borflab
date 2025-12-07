@@ -14,9 +14,9 @@ var seasonLimits = map[Rarity]int{
 	RarityLegendary: 33600,
 }
 
-var stoneProbabilities = map[Stone][5]int{
+var stoneProbabilities = map[StoneType][5]int{
 	StoneQuartz:    {50, 25, 13, 8, 4},
-	StoneTanzanite: {45, 27, 14, 9, 5},
+	StoneAmazonite: {45, 27, 14, 9, 5},
 	StoneAgate:     {43, 26, 15, 10, 6},
 	StoneRuby:      {40, 25, 16, 11, 8},
 	StoneSapphire:  {35, 24, 18, 12, 11},
@@ -43,16 +43,16 @@ const (
 	RarityLegendary Rarity = "legendary"
 )
 
-type Stone string
+type StoneType string
 
 const (
-	StoneQuartz    Stone = "quartz"
-	StoneTanzanite Stone = "tanzanite"
-	StoneAgate     Stone = "agate"
-	StoneRuby      Stone = "ruby"
-	StoneSapphire  Stone = "sapphire"
-	StoneTopaz     Stone = "topaz"
-	StoneJade      Stone = "jade"
+	StoneQuartz    StoneType = "Quartz"
+	StoneAmazonite StoneType = "Amazonite"
+	StoneAgate     StoneType = "Agate"
+	StoneRuby      StoneType = "Ruby"
+	StoneSapphire  StoneType = "Sapphire"
+	StoneTopaz     StoneType = "Topaz"
+	StoneJade      StoneType = "Jade"
 )
 
 type RarityStats struct {
@@ -90,7 +90,7 @@ type Experiment struct {
 	ImageCID    string
 	MetadataCID string
 	Metadata    json.RawMessage
-	Stone       Stone
+	Stone       StoneType
 	Biome       Biome
 	Rarity      Rarity
 
@@ -101,7 +101,56 @@ type Experiment struct {
 	Minted    *time.Time
 }
 
-func (stats *RarityStats) PickRarity(stone Stone) Rarity {
+type Stone struct {
+	Id           int
+	UserId       string
+	MintAddress  string
+	OwnerAddress string
+	SparkCount   int
+	Type         StoneType
+	PdaAddress   string
+	Signature    string
+	Slot         int64
+	Minted       time.Time
+	Created      time.Time
+}
+
+type Monster struct {
+	Id           int
+	UserId       string
+	ExperimentId int
+
+	// === solana stuff ===
+	Signature        string
+	Slot             int64
+	MintAddress      string
+	OwnerAddress     string
+	StoneMintAddress string
+	CardStateAddress string
+
+	// === profile ===
+	Name          string
+	Species       string
+	Lore          string
+	MovementClass string
+	Behaviour     string
+	Personality   string
+	Abilities     string
+	Habitat       string
+	Biome         Biome
+	Rarity        Rarity
+	SerialNumber  int
+	Generation    int
+
+	// === metadata ===
+	MetadataUri string
+	ImageCid    string
+
+	Minted  time.Time
+	Created time.Time
+}
+
+func (stats *RarityStats) PickRarity(stone StoneType) Rarity {
 	baseProbs, exists := stoneProbabilities[stone]
 	if !exists {
 		stone = StoneQuartz

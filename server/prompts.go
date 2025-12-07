@@ -25,7 +25,6 @@ Map the main colours from the creation as body patterns; later you will mention 
 🚫 Reject if input is:
 -Any human, animal, or real living organism
 -Culturally sensitive, weapons, sex toys, religious icons
--Entirely abstract or purely mechanical
 Ensure that you respond with a strictly valid JSON format without formatting it in a code block or adding any extra text.
 If rejected, simply return:
 {

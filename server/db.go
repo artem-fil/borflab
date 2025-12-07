@@ -60,26 +60,128 @@ returning privy_id, email, wallet, created, synced
 	return &updated, nil
 }
 
+func (db *DB) SelectUserByWallet(ctx context.Context, wallet string) (*User, error) {
+	row := db.Conn.QueryRowContext(
+		ctx,
+		`
+select privy_id, email, wallet, created, synced from users
+where wallet = $1
+	`,
+		wallet,
+	)
+
+	var user User
+	err := row.Scan(
+		&user.PrivyId,
+		&user.Email,
+		&user.Wallet,
+		&user.Created,
+		&user.Synced,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+func (db *DB) SelectStone(ctx context.Context, mintAddress string, userId string) (*Stone, error) {
+	var stone Stone
+	err := db.Conn.QueryRowContext(
+		ctx,
+		`
+select id, user_id, mint_address, owner_address, spark_count, stone, pda_address, signature, slot, minted, created
+from stones where mint_address = $1 and user_id = $2
+	`,
+		mintAddress,
+		userId,
+	).Scan(
+		&stone.Id,
+		&stone.UserId,
+		&stone.MintAddress,
+		&stone.OwnerAddress,
+		&stone.SparkCount,
+		&stone.Type,
+		&stone.PdaAddress,
+		&stone.Signature,
+		&stone.Slot,
+		&stone.Minted,
+		&stone.Created,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &stone, nil
+}
+
+func (db *DB) SelectStones(ctx context.Context, userId string) ([]Stone, error) {
+	rows, err := db.Conn.QueryContext(
+		ctx,
+		`
+select id, user_id, mint_address, owner_address, spark_count, stone, pda_address, signature, slot, minted, created
+from stones where user_id = $1
+	`,
+		userId,
+	)
+
+	if err != nil {
+		return nil, err
+
+	}
+	defer rows.Close()
+	var stones []Stone
+
+	for rows.Next() {
+		var stone Stone
+		err := rows.Scan(
+			&stone.Id,
+			&stone.UserId,
+			&stone.MintAddress,
+			&stone.OwnerAddress,
+			&stone.SparkCount,
+			&stone.Type,
+			&stone.PdaAddress,
+			&stone.Signature,
+			&stone.Slot,
+			&stone.Minted,
+			&stone.Created,
+		)
+		if err != nil {
+			return nil, err
+		}
+		stones = append(stones, stone)
+	}
+
+	return stones, nil
+}
+
 func (db *DB) SelectExperiment(ctx context.Context, id string) (*Experiment, error) {
 	row := db.Conn.QueryRowContext(
 		ctx,
 		`
-select from experiments (
-    user_id,
-    input_mime,
-    input_size,
-    input_width,
-    input_height,
-    processed_mime,
-    processed_size,
-    processed_width,
-    processed_height,
-	stone,
-	biome,
-	specimen,
-	rarity,
-	created
-) where id = $1;`,
+        select 
+            id,
+            user_id,
+            input_mime,
+            input_size,
+            input_width,
+            input_height,
+            processed_mime,
+            processed_size,
+            processed_width,
+            processed_height,
+			specimen,
+			image_cid,
+			metadata_cid,
+			metadata,
+            stone,
+            biome,
+            rarity,
+            created
+        from experiments
+        where id = $1;
+        `,
 		id,
 	)
 
@@ -96,9 +198,12 @@ select from experiments (
 		&experiment.ProcessedSize,
 		&experiment.ProcessedWidth,
 		&experiment.ProcessedHeight,
+		&experiment.Specimen,
+		&experiment.ImageCID,
+		&experiment.MetadataCID,
+		&experiment.Metadata,
 		&experiment.Stone,
 		&experiment.Biome,
-		&experiment.Specimen,
 		&experiment.Rarity,
 		&experiment.Created,
 	); err != nil {
@@ -199,14 +304,18 @@ func (db *DB) FinishExperiment(ctx context.Context, e *Experiment) (sql.Result, 
 		ctx,
 		`
 update experiments set
-		image_cid = $1,
-		metadata_cid = $2,
-		generated = $3,
-		uploaded = $4
-where id = $5
+		rarity = $1,
+		image_cid = $2,
+		metadata_cid = $3,
+		metadata = $4,
+		generated = $5,
+		uploaded = $6
+where id = $7
         `,
+		e.Rarity,
 		e.ImageCID,
 		e.MetadataCID,
+		e.Metadata,
 		e.Generated,
 		e.Uploaded,
 		e.Id,
@@ -231,6 +340,106 @@ select
 	).Scan(&stats.CommonIssued, &stats.RareIssued, &stats.EpicIssued, &stats.MythicIssued, &stats.LegendaryIssued)
 
 	return stats, err
+}
+
+func (db *DB) InsertSolanaEvent(ctx context.Context, e *SolanaEvent) (sql.Result, error) {
+	result, err := db.Conn.ExecContext(
+		ctx,
+		`
+insert into solana_events (signature, slot, stage, type, raw_input, program_data, payload, error)
+values ($1, $2, $3, $4, $5, $6, $7, $8)
+        `,
+		e.Signature,
+		e.Slot,
+		e.Stage,
+		e.Type,
+		e.RawInput,
+		e.ProgramData,
+		e.Payload,
+		e.Error,
+	)
+
+	return result, err
+}
+
+func (db *DB) InsertStone(ctx context.Context, stone *Stone) error {
+	_, err := db.Conn.ExecContext(
+		ctx,
+		`
+		insert into stones (
+			user_id, mint_address, owner_address, spark_count, stone, pda_address, signature, slot, minted
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		on conflict (signature) do nothing
+		`,
+		stone.UserId,
+		stone.MintAddress,
+		stone.OwnerAddress,
+		stone.SparkCount,
+		stone.Type,
+		stone.PdaAddress,
+		stone.Signature,
+		stone.Slot,
+		stone.Minted,
+	)
+	return err
+}
+
+func (db *DB) InsertMonster(ctx context.Context, monster *Monster) error {
+	_, err := db.Conn.ExecContext(
+		ctx,
+		`
+insert into monsters (
+	user_id,
+	experiment_id,
+	mint_address,
+	owner_address,
+	stone_mint_address,
+	card_state_address,
+	name,
+	species,
+	lore,
+	movement_class,
+	behaviour,
+	personality,
+	abilities,
+	habitat,
+	biome,
+	rarity,
+	metadata_uri,
+	image_cid,
+	serial_number,
+	generation,
+	signature,
+	slot,
+	minted
+) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+on conflict (signature) do nothing
+		`,
+		monster.UserId,
+		monster.ExperimentId,
+		monster.MintAddress,
+		monster.OwnerAddress,
+		monster.StoneMintAddress,
+		monster.CardStateAddress,
+		monster.Name,
+		monster.Species,
+		monster.Lore,
+		monster.MovementClass,
+		monster.Behaviour,
+		monster.Personality,
+		monster.Abilities,
+		monster.Habitat,
+		monster.Biome,
+		monster.Rarity,
+		monster.MetadataUri,
+		monster.ImageCid,
+		monster.SerialNumber,
+		monster.Generation,
+		monster.Signature,
+		monster.Slot,
+		monster.Minted,
+	)
+	return err
 }
 
 func nullable(s string) sql.NullString {

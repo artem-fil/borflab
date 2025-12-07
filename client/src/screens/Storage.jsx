@@ -11,8 +11,7 @@ import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddres
 
 import * as anchor from "@coral-xyz/anchor";
 
-import idl from "../borflab_chain.json";
-
+import { usePrivy } from "@privy-io/react-auth";
 import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 
 import { useEffect, useState } from "react";
@@ -35,6 +34,7 @@ const ENDPOINT = "https://api.devnet.solana.com";
 const STONE_TYPES = ["Quartz", "Amazonite", "Ruby", "Agate", "Sapphire", "Topaz", "Jade"];
 
 export default function Storage() {
+    const { user } = usePrivy();
     const { wallets } = useWallets();
     const { signTransaction } = useSignTransaction();
     const solanaWallet = wallets[0];
@@ -51,6 +51,87 @@ export default function Storage() {
             loadStonesData();
         }
     }, [solanaWallet?.address]);
+
+    async function loadStonesData() {
+        setLoading(true);
+        try {
+            const publicKey = new PublicKey(solanaWallet.address);
+
+            const tokenAccounts = await connection.getParsedTokenAccountsByOwner(publicKey, {
+                programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+            });
+
+            const stonesSparks = {};
+            STONE_TYPES.forEach((type) => {
+                stonesSparks[type] = 0;
+            });
+
+            for (const tokenAccount of tokenAccounts.value) {
+                const mint = new PublicKey(tokenAccount.account.data.parsed.info.mint);
+                const amount = tokenAccount.account.data.parsed.info.tokenAmount.uiAmount;
+
+                if (amount === 0) continue;
+
+                try {
+                    const [stoneStatePda] = PublicKey.findProgramAddressSync(
+                        [new TextEncoder().encode("stone_state"), mint.toBuffer()],
+                        PROGRAM_ID
+                    );
+
+                    const [metadataPda] = PublicKey.findProgramAddressSync(
+                        [new TextEncoder().encode("metadata"), TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+                        TOKEN_METADATA_PROGRAM_ID
+                    );
+
+                    const [accountInfo, metadataAccount] = await Promise.all([
+                        connection.getAccountInfo(stoneStatePda),
+                        connection.getAccountInfo(metadataPda),
+                    ]);
+
+                    if (!accountInfo || !metadataAccount) continue;
+
+                    const sparksRemaining = new DataView(accountInfo.data.buffer).getUint16(40, true);
+
+                    const view = new DataView(metadataAccount.data.buffer);
+                    let offset = 65;
+
+                    offset += 4 + view.getUint32(offset, true);
+                    offset += 4 + view.getUint32(offset, true);
+
+                    const uriLength = view.getUint32(offset, true);
+                    offset += 4;
+                    const uriBytes = new Uint8Array(metadataAccount.data.buffer, offset, uriLength);
+                    const uri = new TextDecoder().decode(uriBytes);
+
+                    if (!uri) continue;
+
+                    const response = await fetch(uri);
+                    if (!response.ok) continue;
+
+                    const metadataJSON = await response.json();
+                    const stoneName = metadataJSON.name;
+
+                    if (STONE_TYPES.includes(stoneName)) {
+                        stonesSparks[stoneName] += sparksRemaining;
+                        console.log(`stone: ${stoneName} sparks: ${sparksRemaining} address: ${mint.toBase58()}`);
+                    }
+                } catch (error) {
+                    continue;
+                }
+            }
+
+            setStones(stonesSparks);
+        } catch (error) {
+            console.error("Error loading stones data:", error);
+            const emptyStones = {};
+            STONE_TYPES.forEach((type) => {
+                emptyStones[type] = 0;
+            });
+            setStones(emptyStones);
+        } finally {
+            setLoading(false);
+        }
+    }
 
     async function mintStone() {
         try {
@@ -162,9 +243,10 @@ export default function Storage() {
             });
 
             console.log("📦 Building transaction...");
+            const user_id = 12345;
 
             const transaction = await program.methods
-                .mintStoneInstance()
+                .mintStoneInstance(user_id)
                 .accounts({
                     mint,
                     owner: solanaWallet.publicKey,
@@ -272,87 +354,6 @@ export default function Storage() {
             }
 
             throw error;
-        }
-    }
-
-    async function loadStonesData() {
-        setLoading(true);
-        try {
-            const publicKey = new PublicKey(solanaWallet.address);
-
-            const tokenAccounts = await connection.getParsedTokenAccountsByOwner(publicKey, {
-                programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-            });
-
-            const stonesSparks = {};
-            STONE_TYPES.forEach((type) => {
-                stonesSparks[type] = 0;
-            });
-
-            for (const tokenAccount of tokenAccounts.value) {
-                const mint = new PublicKey(tokenAccount.account.data.parsed.info.mint);
-                const amount = tokenAccount.account.data.parsed.info.tokenAmount.uiAmount;
-
-                if (amount === 0) continue;
-
-                try {
-                    const [stoneStatePda] = PublicKey.findProgramAddressSync(
-                        [new TextEncoder().encode("stone_state"), mint.toBuffer()],
-                        PROGRAM_ID
-                    );
-
-                    const [metadataPda] = PublicKey.findProgramAddressSync(
-                        [new TextEncoder().encode("metadata"), TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.toBuffer()],
-                        TOKEN_METADATA_PROGRAM_ID
-                    );
-
-                    const [accountInfo, metadataAccount] = await Promise.all([
-                        connection.getAccountInfo(stoneStatePda),
-                        connection.getAccountInfo(metadataPda),
-                    ]);
-
-                    if (!accountInfo || !metadataAccount) continue;
-
-                    const sparksRemaining = new DataView(accountInfo.data.buffer).getUint16(40, true);
-
-                    const view = new DataView(metadataAccount.data.buffer);
-                    let offset = 65;
-
-                    offset += 4 + view.getUint32(offset, true);
-                    offset += 4 + view.getUint32(offset, true);
-
-                    const uriLength = view.getUint32(offset, true);
-                    offset += 4;
-                    const uriBytes = new Uint8Array(metadataAccount.data.buffer, offset, uriLength);
-                    const uri = new TextDecoder().decode(uriBytes);
-
-                    if (!uri) continue;
-
-                    const response = await fetch(uri);
-                    if (!response.ok) continue;
-
-                    const metadataJSON = await response.json();
-                    const stoneName = metadataJSON.name;
-
-                    if (STONE_TYPES.includes(stoneName)) {
-                        stonesSparks[stoneName] += sparksRemaining;
-                        console.log(`stone: ${stoneName} sparks: ${sparksRemaining} address: ${mint.toBase58()}`);
-                    }
-                } catch (error) {
-                    continue;
-                }
-            }
-
-            setStones(stonesSparks);
-        } catch (error) {
-            console.error("Error loading stones data:", error);
-            const emptyStones = {};
-            STONE_TYPES.forEach((type) => {
-                emptyStones[type] = 0;
-            });
-            setStones(emptyStones);
-        } finally {
-            setLoading(false);
         }
     }
 

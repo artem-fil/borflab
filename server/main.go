@@ -41,17 +41,15 @@ func main() {
 
 	mddlwr := NewMiddleware(cfg.Privy)
 
-	api := NewApi(cfg, db, telegram)
+	solanaAgent := NewSolanaAgent(cfg.Solana, db)
+
+	api := NewApi(cfg, db, telegram, solanaAgent)
 
 	mux := NewRouter(mddlwr, api)
 
 	server := mddlwr.Wrap(mux)
 
-	_ = NewSolanaListener(
-		cfg.Solana.ProgramId,
-		func(msg string) { LogInfo("Solana", msg) },
-	)
-
 	LogInfo("Main", fmt.Sprintf("🚀 Server started on %s", cfg.Port))
 	LogError("Main", "ListenAndServe", http.ListenAndServe(":"+cfg.Port, server))
+
 }

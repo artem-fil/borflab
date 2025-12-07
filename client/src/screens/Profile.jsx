@@ -14,8 +14,6 @@ import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddres
 
 import * as anchor from "@coral-xyz/anchor";
 
-import idl from "../borflab_chain.json";
-
 import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 
 import { usePrivy } from "@privy-io/react-auth";
@@ -66,7 +64,7 @@ export default function Profile() {
 
         fetchBalanceAndNFTs();
     }, [solanaWallet]);
-
+    /*
     useEffect(() => {
         if (!userNFTs || userNFTs.length === 0) return;
 
@@ -165,6 +163,7 @@ export default function Profile() {
         console.error("All proxies failed for URL:", url);
         return null;
     };
+    */
 
     async function mintStone() {
         try {
@@ -392,10 +391,8 @@ export default function Profile() {
 
     async function mintCard() {
         try {
-            const response = await fetch("http://localhost:8282/mint");
-            const data = await response.json();
-            const txBase64 = data.transaction;
-
+            const TxBase64 =
+                "AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAasN1lW72ca5Z78G2wG7ybvZnYMt3PnY95XWHjJjVktbtbY/WzeXHGcXpaUZ2uSMZqVHc/PoUUtgWtx+sVntwNvxumg1j4g1MM1qJDwHQgTpwwRe2mGiVbi3HAElUGQyVdVAckoPY5V0+cuyllmh4KZvuhtWj2ldjUZKBuKNUKDQMBChforvMDkOCOh1corhmJy6eke8apbT0kljl2RX6mONUgH5ihXgUaVWXYuoGg/gN0fwOWWaFqMbImBonwjq3oz+DLontb67VIKTWWH/pvENee9Cm8ra/lQK8I3ngsLXoX4wDG3LSGUxlsD/RaS2dcBzPz7ZUlYbloJkexPDRu5p0vEM7y5n2K3YOgr3uQ5uGS1NL8SEiiIE7TRsYrllYiE7BTL6lQKzZdbrpSNypBJIoD7TS6rVFHTQvKxVRbuss16hPGNBHOZz1SU0GZxVdg8jdGl8hs8IC3iPg8Ac3yIhJxtEPFHWdR7w3oktLLaMOV4f+DBo5wfMiROo/2h0o+5pfv2Mh13qGm8VunKVk2FPUBuYeAV3BVXnCfIWFFE2TndbcQ/gciIV56ldWjUmL3LFDQN8YYLMLLny/acv8VZWMDTPsEr+TiiBPaV7EgivrMLRD/t43Xh+ecnrP7JY1ByjFwIKgzGbXH5f6ehJsXnggFLVKsVHV/iiSrF/fpEuJhFXt+EzrCcApHJAjWZq5/EtpfT+RgS02NpujMNug9FzbzSvcfl6MAm1CQW60puS/4Da5VPVVYbzXcAmaDucw40nxUlzS3pCyd38laVbA/0+SQIWVXHVGjZoOz5A1yz9UUSgBfOZNLaT/CjHWzFhz0ycl4Tm2n1H++RFO9jmC1fg3jDAbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpjJclj04kifG7PRApFI4NgwtaE5na/xCEBI572Nvp+FkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAtwZbHj0XxFOJ1Sf2sEw81YuGxzGqD9tUm20bwD+ClGBqfVFxksXFEhjMlMPUrxf1ja7gibof1E49vZigAAAAADBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAABaA9sbq9fvzRGRyjcMJxc03/cp6EPPcLzQzTwFKTNQ9eSeOYrVMKpq39CH/Iyz68x3thHOnCHnEQHJH6eq7VLUDFQAFAuCTBAASAgABNAAAAABgTRYAAAAAAFIAAAAAAAAABt324ddloZPZy+FGzut5rBy0he1fWzeROoz1hX7/AKkWFQEAAwINDgQFBgcPCAkKCwwQERITFKYBBLZT2egjIUAKAAAAVHVyYm96ZWxsZWsAAABUaGlzIGNyZWF0dXJlIGV4dWRlcyBjb25maWRlbmNlLCBpbnNwaXJpbmcgYXdlIGFuZCBlbnRodXNpYXNtIGFtb25nIHRob3NlIHdobyBlbmNvdW50ZXIgaXRzIGVuZXJnZXRpYyBkYXNoLggAAABhbWF6b25pYQYAAABteXRoaWMHAAAAaXBmczovLw==";
             function base64ToUint8Array(base64) {
                 const raw = atob(base64);
                 const array = new Uint8Array(raw.length);
@@ -404,43 +401,14 @@ export default function Profile() {
                 }
                 return array;
             }
+            const tx = Transaction.from(base64ToUint8Array(TxBase64));
 
-            const txBytes = base64ToUint8Array(txBase64);
-            const transaction = Transaction.from(txBytes);
+            const connection = new Connection(ENDPOINT, "confirmed");
+            const result = await connection.simulateTransaction(tx, [], false);
 
-            const serializedTx = transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
-            const txUint8Array = new Uint8Array(serializedTx);
-
-            const { signedTransaction } = await signTransaction({
-                wallet: solanaWallet,
-                transaction: txUint8Array,
-                chain: "solana:devnet",
-            });
-
-            console.log("🚀 Sending transaction...");
-
-            const txid = await connection.sendRawTransaction(signedTransaction);
-
-            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-
-            const confirmation = await connection.confirmTransaction(
-                {
-                    signature: txid,
-                    blockhash,
-                    lastValidBlockHeight,
-                },
-                "confirmed"
-            );
-
-            if (confirmation.value.err) {
-                throw new Error(`Transaction failed: ${confirmation.value.err}`);
-            }
-
-            // === POST-MINT VERIFICATION ===
-            console.log("✅ NFT minted successfully!");
-            console.log("🎉 Result:");
-            console.log(`   Transaction: ${txid}`);
-            console.log(`   TX Explorer: https://explorer.solana.com/tx/${txid}?cluster=devnet`);
+            console.log(result.value.err);
+            console.log(result.value.logs);
+            return;
         } catch (err) {
             console.error("❌ Transaction failed:");
             console.error(err);

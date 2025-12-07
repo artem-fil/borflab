@@ -11,6 +11,7 @@ import (
 
 	"image"
 	"image/jpeg"
+	_ "image/png"
 
 	"golang.org/x/image/draw"
 )
@@ -100,10 +101,10 @@ func resizeAndConvert(file io.Reader, maxDim int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func CheckStone(maybeStone string) (*Stone, error) {
-	stone := Stone(maybeStone)
+func CheckStone(maybeStone string) (*StoneType, error) {
+	stone := StoneType(maybeStone)
 	switch stone {
-	case StoneQuartz, StoneTanzanite, StoneAgate, StoneRuby, StoneSapphire, StoneTopaz, StoneJade:
+	case StoneQuartz, StoneAmazonite, StoneAgate, StoneRuby, StoneSapphire, StoneTopaz, StoneJade:
 		return &stone, nil
 	default:
 		return nil, fmt.Errorf("invalid stone: '%s'", maybeStone)

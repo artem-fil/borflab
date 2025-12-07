@@ -37,21 +37,22 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
             const formData = new FormData();
             formData.append("file", dataURLtoFile(specimen, "specimen.jpg"));
             formData.append("biome", biome);
-            formData.append("stone", stone.id);
+            formData.append("stone", stone.Address);
             const { Id } = await api.analyze(formData, abortControllerRef.current?.signal);
             pollAnalyzeProgress(Id);
         } catch (err) {
-            await appendTypedLine(`  🔴 ${err.message || err}`);
-            await appendTypedLine(" Please, try again.");
+            await appendTypedLine(`🔴 ${err.message || err}`);
+            await appendTypedLine("Please, try again.");
         }
     }
 
     async function pollAnalyzeProgress(analyzeTaskId) {
         const BASE_DELAY = 1500;
         let currentStep = 0;
-
-        const timeout = setTimeout(() => {
-            appendTypedLine("Analysis timeout: process terminated");
+        let pollingCancelled = false;
+        const timeout = setTimeout(async () => {
+            pollingCancelled = true;
+            await appendTypedLine("⚠️ Analysis timeout: process terminated");
         }, 5 * 60 * 1000);
 
         async function poll() {
@@ -61,7 +62,9 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
                 const step = Math.floor(progress / 10);
                 if (step > currentStep) {
                     for (; currentStep < step; currentStep++) {
-                        await appendTypedLine(progressMessages[currentStep]);
+                        if (!error) {
+                            await appendTypedLine(progressMessages[currentStep]);
+                        }
                     }
                 }
                 if (done) {
@@ -71,17 +74,19 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
                     if (error) {
                         throw error;
                     } else {
-                        await appendTypedLine(" Analysis complete!");
+                        await appendTypedLine("Analysis complete!");
                         setTimeout(next, 1500);
                     }
                 } else {
-                    setTimeout(poll, BASE_DELAY);
+                    if (!pollingCancelled) {
+                        setTimeout(poll, BASE_DELAY);
+                    }
                 }
             } catch (err) {
                 clearTimeout(timeout);
                 console.error(err);
-                await appendTypedLine(`  🔴 ${err}`);
-                await appendTypedLine(" Please, try again.");
+                await appendTypedLine(`🔴 ${err}`);
+                await appendTypedLine("Please, try again.");
             }
         }
 
@@ -89,22 +94,17 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
     }
 
     async function appendTypedLine(line = "") {
-        if (!line) return Promise.resolve();
+        if (!line) return;
 
         typingRef.current = true;
-        return new Promise((resolve) => {
-            let i = 0;
-            const interval = setInterval(() => {
-                setDisplayed((prev) => prev + line.charAt(i));
-                i++;
-                if (i >= line.length) {
-                    clearInterval(interval);
-                    setDisplayed((prev) => prev + "\n");
-                    typingRef.current = false;
-                    resolve();
-                }
-            }, 30);
-        });
+
+        for (let i = 0; i < line.length; i++) {
+            setDisplayed((prev) => prev + line[i]);
+            await new Promise((r) => setTimeout(r, 30));
+        }
+
+        setDisplayed((prev) => prev + "\n");
+        typingRef.current = false;
     }
 
     function dataURLtoFile(dataurl, filename) {
@@ -118,14 +118,14 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
     }
 
     const progressMessages = [
-        " 🔬 Adding quantum stabilizer ✅",
-        " 🥬 Throwing in the bio-gel ✅",
-        " 💨 Adjusting carbon regulators ✅",
-        " 🐌 Feeding Ted to specimen ✅",
-        " 🧪 Mixing neural reagents ✅",
-        " ⚙️ Calibrating flux capacitors ✅",
-        " 🧠 Stabilizing entropy field ✅",
-        " ✨ Finalizing data output ✅",
+        "🔬 Adding quantum stabilizer ✅",
+        "🥬 Throwing in the bio-gel ✅",
+        "💨 Adjusting carbon regulators ✅",
+        "🐌 Feeding Ted to specimen ✅",
+        "🧪 Mixing neural reagents ✅",
+        "⚙️ Calibrating flux capacitors ✅",
+        "🧠 Stabilizing entropy field ✅",
+        "✨ Finalizing data output ✅",
     ];
 
     return (

@@ -1,37 +1,106 @@
+import { useWallets } from "@privy-io/react-auth/solana";
 import { useState, useEffect, useRef } from "react";
 import posterImg from "../assets/poster.png";
 import igniterImg from "../assets/igniter.png";
 import placeholderImg from "../assets/placeholder.svg";
+import api from "../api";
 
-import agateImage from "../assets/agate.png";
-import jadeImage from "../assets/jade.png";
-import topazImage from "../assets/topaz.png";
-import quartzImage from "../assets/quartz.png";
-import sapphireImage from "../assets/sapphire.png";
-import amazoniteImage from "../assets/amazonite.png";
-import rubyImage from "../assets/ruby.png";
-
-const STONES = [
-    { id: "agate", name: "Agate", image: agateImage },
-    { id: "sapphire", name: "Sapphire", image: sapphireImage },
-    { id: "ruby", name: "Ruby", image: rubyImage },
-    { id: "quartz", name: "Quartz", image: quartzImage },
-    { id: "amazonite", name: "Amazonite", image: amazoniteImage },
-    { id: "jade", name: "Jade", image: jadeImage },
-    { id: "topaz", name: "Topaz", image: topazImage },
-];
+import { STONES } from "../config.js";
 
 export default function Step1({ next, setSpecimen, stone, setStone }) {
+    const { wallets } = useWallets();
     const fileInputRef = useRef(null);
+    const typingRef = useRef(false);
     const [preview, setPreview] = useState(null);
     const [displayed, setDisplayed] = useState("");
     const [showStoneDialog, setShowStoneDialog] = useState(false);
-    const [index, setIndex] = useState(0);
+    const [availableStones, setAvailableStones] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    const solanaWallet = wallets[0];
+
+    async function appendTypedLine(line = "") {
+        if (!line) return;
+
+        typingRef.current = true;
+
+        for (let i = 0; i < line.length; i++) {
+            setDisplayed((prev) => prev + line[i]);
+            await new Promise((r) => setTimeout(r, 30));
+        }
+
+        setDisplayed((prev) => prev + "\n");
+        typingRef.current = false;
+    }
+
+    useEffect(() => {
+        if (solanaWallet?.address) {
+            loadStonesData();
+        }
+    }, [solanaWallet?.address]);
+
+    async function loadStonesData() {
+        setLoading(true);
+        try {
+            const stones = [];
+            const s = await api.getStones();
+
+            for (let stone of s) {
+                if (!stones[stone.Type]) {
+                    stones[stone.Type] = {
+                        Type: stone.Type,
+                        Image: STONES[stone.Type],
+                        Address: stone.MintAddress,
+                        TotalSparks: 0,
+                        SparkCount: Infinity,
+                    };
+                }
+                stones[stone.Type].TotalSparks += stone.SparkCount;
+
+                if (stone.SparkCount < stones[stone.Type].SparkCount) {
+                    stones[stone.Type].Address = stone.MintAddress;
+                    stones[stone.Type].SparkCount = stone.SparkCount;
+                }
+            }
+
+            setAvailableStones(stones);
+        } catch (error) {
+            console.error("Error loading stones data:", error);
+            setAvailableStones({});
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    const handleStoneSelect = async (stoneType) => {
+        const stoneData = availableStones[stoneType];
+        if (stoneData && stoneData.SparkCount > 0) {
+            setStone(stoneData);
+            setShowStoneDialog(false);
+        }
+        await appendTypedLine(`${stoneType} selected.`);
+        if (preview) {
+            await appendTypedLine("Ready for analysis.");
+            await appendTypedLine("Status: waiting for approval…");
+        }
+    };
+
+    const getStoneSparksInfo = (stoneType) => {
+        if (loading) return { display: "...", hasSparks: false };
+
+        const stoneData = availableStones[stoneType];
+        const hasSparks = !!stoneData && stoneData.SparkCount > 0;
+
+        return {
+            display: hasSparks ? stoneData.SparkCount.toString().padStart(2, "0") : "00",
+            hasSparks,
+        };
+    };
 
     const MAX_FILE_SIZE_MB = 10;
     const MAX_DIMENSION = 2000;
 
-    const handleFileChange = (e) => {
+    const handleFileChange = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
@@ -68,26 +137,14 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
             img.src = reader.result;
         };
         reader.readAsDataURL(file);
-    };
-
-    const handleStoneSelect = (stone) => {
-        setStone(stone);
-        setShowStoneDialog(false);
+        await appendTypedLine("Specimen uploaded.");
+        if (stone) {
+            await appendTypedLine("Ready for analysis.");
+            await appendTypedLine("Status: waiting for approval…");
+        }
     };
 
     const isNextEnabled = preview && stone;
-
-    const text = "Specimen uploaded. Ready for analysis. Status: waiting for approval…";
-
-    useEffect(() => {
-        if (preview && index < text.length) {
-            const timeout = setTimeout(() => {
-                setDisplayed((prev) => prev + text[index]);
-                setIndex((i) => i + 1);
-            }, 40);
-            return () => clearTimeout(timeout);
-        }
-    }, [index, preview, text]);
 
     return (
         <div className="flex flex-col items-center h-full justify-between">
@@ -120,11 +177,11 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                 <img src={igniterImg} onClick={next} alt="igniter" className="w-full h-auto object-contain" />
                 {/* stone dialog */}
                 <div
-                    className="absolute aspect-square cursor-pointer"
+                    className="flex items-center justify-center absolute aspect-square cursor-pointer"
                     style={{ top: "13%", left: "13%", width: "25%" }}
                     onClick={() => setShowStoneDialog(true)}
                 >
-                    {stone && <img src={stone.image} alt={stone.name} className="w-full h-full object-cover" />}
+                    {stone && <img src={stone.Image} alt={stone.Address} className="h-1/2 object-cover" />}
                 </div>
                 {/* submit */}
                 <button
@@ -138,7 +195,7 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                 />
                 {/* monitor */}
                 <div
-                    className="absolute text-xs text-lime-500"
+                    className="absolute text-xs text-lime-500 overflow-y-auto"
                     style={{
                         top: "17%",
                         left: "49%",
@@ -167,18 +224,37 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                     <div className="bg-gray-900 border border-lime-500 rounded-lg p-6 max-w-md w-full">
                         <h3 className="text-lime-500 text-lg font-bold mb-4 text-center">SELECT STONE</h3>
                         <div className="grid grid-cols-3 gap-4">
-                            {STONES.map(({ id, name, image }) => (
-                                <button
-                                    key={id}
-                                    onClick={() => handleStoneSelect({ id, name, image })}
-                                    className="flex flex-col items-center rounded-lg hover:border-lime-500 transition-colors"
-                                >
-                                    <div className="w-14 h-14 bg-gray-700 rounded-full mb-2 flex items-center justify-center">
-                                        <img src={image} alt="" />
-                                    </div>
-                                    <span className="text-white text-xs">{name}</span>
-                                </button>
-                            ))}
+                            {Object.entries(STONES).map(([id, image]) => {
+                                const sparksInfo = getStoneSparksInfo(id);
+                                const isDisabled = !sparksInfo.hasSparks;
+
+                                return (
+                                    <button
+                                        key={id}
+                                        onClick={() => !isDisabled && handleStoneSelect(id)}
+                                        disabled={isDisabled}
+                                        className={`flex flex-col items-center rounded-lg transition-colors ${
+                                            isDisabled
+                                                ? "opacity-50 cursor-not-allowed grayscale"
+                                                : "hover:border-lime-500"
+                                        }`}
+                                    >
+                                        <div
+                                            className={`w-14 h-14 rounded-full mb-2 flex items-center justify-center ${
+                                                isDisabled ? "bg-gray-800" : "bg-gray-700"
+                                            }`}
+                                        >
+                                            <img src={image} alt={id} />
+                                        </div>
+                                        <span className={`text-xs ${isDisabled ? "text-gray-500" : "text-white"}`}>
+                                            {id}
+                                        </span>
+                                        <span className={`text-xs ${isDisabled ? "text-gray-500" : "text-white"}`}>
+                                            {sparksInfo.display}
+                                        </span>
+                                    </button>
+                                );
+                            })}
                         </div>
                         <button
                             onClick={() => setShowStoneDialog(false)}

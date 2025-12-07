@@ -30,12 +30,11 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	mux := http.NewServeMux()
 	router := &Router{mux: mux}
 
-	router.Handle("GET", "/ping", mddlwr.RequireAuth(api.Ping))
+	router.Handle("GET", "/stones", mddlwr.RequireAuth(api.GetStones))
+	router.Handle("POST", "/users/sync", mddlwr.RequireAuth(api.SyncUser))
 	router.Handle("POST", "/analyze", mddlwr.RequireAuth(api.AnalyzeSpecimen))
 	router.Handle("GET", "/progress/:id", mddlwr.RequireAuth(api.Progress))
 	router.Handle("POST", "/prepare/:id", mddlwr.RequireAuth(api.PrepareMint))
-	router.Handle("POST", "/users/sync", mddlwr.RequireAuth(api.SyncUser))
-	router.Handle("GET", "/mint", api.TestMint)
 
 	return router
 }

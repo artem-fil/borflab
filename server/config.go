@@ -24,10 +24,11 @@ type PrivyConfig struct {
 }
 
 type SolanaConfig struct {
+	ProgramId            string
+	CardCollectionPubKey string
+
 	AdminPublicKey            string
-	ProgramId                 string
 	StoneCollection           string
-	CardCollection            string
 	CollectionUpdateAuthority string
 	TreasuryPda               string
 }
@@ -94,6 +95,10 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	cardCollectionPubKey, err := requireEnv("SOLANA_CARD_COLLECTION")
+	if err != nil {
+		return nil, err
+	}
 
 	telegramEnabled := requireEnvBool("TELEGRAM_ENABLED", false)
 	telegramToken, err := requireEnv("TELEGRAM_TOKEN")
@@ -125,7 +130,8 @@ func LoadConfig() (*Config, error) {
 			Wallet:          privyWallet,
 		},
 		Solana: SolanaConfig{
-			ProgramId: solanaProgramId,
+			ProgramId:            solanaProgramId,
+			CardCollectionPubKey: cardCollectionPubKey,
 		},
 		Pinata: PinataConfig{
 			PinataKey:    pinataKey,

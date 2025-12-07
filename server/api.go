@@ -25,9 +25,10 @@ import (
 )
 
 const (
-	OpenAICompletionURL = "https://api.openai.com/v1/chat/completions"
-	OpenAIGenerationURL = "https://api.openai.com/v1/images/generations"
-	PinataPinFileUrl    = "https://api.pinata.cloud/pinning/pinFileToIPFS"
+	OPENAI_COMPLETION_URL     = "https://api.openai.com/v1/chat/completions"
+	OPENAI_GENERATION_URL     = "https://api.openai.com/v1/images/generations"
+	PINATA_PIN_FILE_URL       = "https://api.pinata.cloud/pinning/pinFileToIPFS"
+	TOKEN_METADATA_PROGRAM_ID = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
 )
 
 var (
@@ -35,27 +36,27 @@ var (
 )
 
 type TaskStatus struct {
-	ExperimentId int    `json:"experimentId"`
-	Progress     int    `json:"progress"`
-	Done         bool   `json:"done"`
-	Error        string `json:"error,omitempty"`
-	Result       any    `json:"result,omitempty"`
-	NextTaskId   string `json:"nextTask,omitempty"`
+	Progress   int    `json:"progress"`
+	Done       bool   `json:"done"`
+	Error      string `json:"error,omitempty"`
+	Result     any    `json:"result,omitempty"`
+	NextTaskId string `json:"nextTask,omitempty"`
 }
 
 type api struct {
-	cfg      *Config
-	db       *DB
-	telegram *Telegram
+	cfg         *Config
+	db          *DB
+	telegram    *Telegram
+	solanaAgent *SolanaAgent
 }
 
-func NewApi(cfg *Config, db *DB, telegram *Telegram) *api {
-	return &api{cfg, db, telegram}
+type mintForm struct {
+	UserPubKey  string `json:"userPubKey"`
+	StonePubKey string `json:"stonePubKey"`
 }
 
-func (a *api) Ping(rw *Responder, r *http.Request) {
-
-	fmt.Fprint(rw, "pong")
+func NewApi(cfg *Config, db *DB, telegram *Telegram, solanaAgent *SolanaAgent) *api {
+	return &api{cfg, db, telegram, solanaAgent}
 }
 
 func (a *api) SyncUser(w *Responder, r *http.Request) {
@@ -82,6 +83,19 @@ func (a *api) SyncUser(w *Responder, r *http.Request) {
 	w.Send(syncedUser)
 }
 
+func (a *api) GetStones(w *Responder, r *http.Request) {
+
+	ctx := r.Context()
+	claims, _ := Claims(r)
+
+	stones, err := a.db.SelectStones(ctx, claims.Id)
+	if err != nil {
+		a.DbError(w, err)
+		return
+	}
+	w.Send(stones)
+}
+
 func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 
 	taskID := uuid.NewString()
@@ -95,11 +109,15 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		tasks.Delete(taskID)
 	})
 
-	stone, err := CheckStone(r.FormValue("stone"))
-	if err != nil || stone == nil {
-		a.BadRequestError(w, err)
+	ctx := r.Context()
+	claims, _ := Claims(r)
+
+	selectedStone, err := a.db.SelectStone(ctx, r.FormValue("stone"), claims.Id)
+	if err != nil {
+		a.DbError(w, fmt.Errorf("cannot select stone %v", err))
 		return
 	}
+
 	biome, err := CheckBiome(r.FormValue("biome"))
 	if err != nil || biome == nil {
 		a.BadRequestError(w, err)
@@ -139,8 +157,6 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		return
 	}
 
-	claims, _ := Claims(r)
-
 	experiment := &Experiment{
 		UserId:          claims.Id,
 		InputMime:       inputMime,
@@ -152,7 +168,7 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		ProcessedHeight: processedHeight,
 		ProcessedSize:   processedSize,
 		ProcessedImage:  resizedImg,
-		Stone:           *stone,
+		Stone:           StoneType(selectedStone.Type),
 		Biome:           *biome,
 		Created:         time.Now().UTC(),
 	}
@@ -174,21 +190,33 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 
 func (a *api) processImage(taskID string, imgBytes []byte, experiment *Experiment) {
 
-	fail := func(msg string, err error) {
-		if task, ok := tasks.Load(taskID); ok {
-			LogError("API", msg, err)
-			if t, ok := task.(*TaskStatus); ok {
-				t.Error = msg
-				t.Done = true
-				t.Progress = 100
-			} else {
-				LogError("API", "cannot cast TaskStatus", err)
-			}
-		}
+	taskRaw, ok := tasks.Load(taskID)
+	if !ok {
+		LogError("API", "task not found", nil)
+		return
+	}
+	task, ok := taskRaw.(*TaskStatus)
+	if !ok {
+		LogError("API", "cannot cast TaskStatus", nil)
+		return
 	}
 
 	doneChan := make(chan struct{})
+
 	go simulateProgress(taskID, 1, 99, 40*time.Second, doneChan)
+
+	fail := func(msg string, err error) {
+		select {
+		case <-doneChan:
+		default:
+			close(doneChan)
+		}
+
+		LogError("API", msg, err)
+		task.Error = msg
+		task.Done = true
+		task.Progress = 100
+	}
 
 	requestBody := map[string]any{
 		"model": "gpt-4o",
@@ -227,21 +255,15 @@ func (a *api) processImage(taskID string, imgBytes []byte, experiment *Experimen
 		return
 	}
 
-	req, err := http.NewRequest(
-		http.MethodPost,
-		OpenAICompletionURL,
-		bytes.NewReader(bodyBytes),
-	)
+	req, err := http.NewRequest(http.MethodPost, OPENAI_COMPLETION_URL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		fail("cannot create request", err)
 		return
 	}
-
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.cfg.OpenAIToken)
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fail("cannot make external request", err)
 		return
@@ -258,6 +280,7 @@ func (a *api) processImage(taskID string, imgBytes []byte, experiment *Experimen
 		fail("OpenAI API refused", fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody)))
 		return
 	}
+
 	close(doneChan)
 
 	var rawResp struct {
@@ -274,53 +297,50 @@ func (a *api) processImage(taskID string, imgBytes []byte, experiment *Experimen
 		return
 	}
 
-	sanitizedJson, err := sanitizeJSON(rawResp.Choices[0].Message.Content)
+	if len(rawResp.Choices) == 0 {
+		fail("empty choices in OpenAI response", nil)
+		return
+	}
+
+	content := rawResp.Choices[0].Message.Content
+	sanitizedJson, err := sanitizeJSON(content)
 	if err != nil {
 		fail("malformed json response", err)
 		return
 	}
-	if task, ok := tasks.Load(taskID); ok {
-		if t, ok := task.(*TaskStatus); ok {
-			t.Done = true
-			var parsed map[string]any
-			err := json.Unmarshal(sanitizedJson, &parsed)
-			if err != nil {
-				t.Error = "invalid json result"
-				return
-			}
 
-			maybeError, hasError := parsed["Error"]
-			if hasError {
-				t.Error = maybeError.(string)
-				return
-			}
-
-			analyzed := time.Now().UTC()
-			experiment := Experiment{
-				Id:       experiment.Id,
-				Specimen: sanitizedJson,
-				Analyzed: &analyzed,
-			}
-
-			_, err = a.db.AnalyzeExperiment(context.Background(), &experiment)
-			if err != nil {
-				fail("cannot continue experiment", err)
-				return
-			}
-
-			nextTask := uuid.NewString()
-			go a.generateImage(nextTask, parsed, experiment)
-			tasks.Store(nextTask, &TaskStatus{
-				Progress: 0,
-				Done:     false,
-			})
-			t.Progress = 100
-			t.Result = parsed
-			t.NextTaskId = nextTask
-		} else {
-			LogError("API", "cannot cast TaskStatus", err)
-		}
+	var parsed map[string]any
+	if err := json.Unmarshal(sanitizedJson, &parsed); err != nil {
+		fail("invalid json result", err)
+		return
 	}
+
+	if maybeError, hasError := parsed["Error"]; hasError {
+		task.Error = fmt.Sprint(maybeError)
+		task.Done = true
+		task.Progress = 100
+		return
+	}
+
+	analyzed := time.Now().UTC()
+	experiment.Specimen = sanitizedJson
+	experiment.Analyzed = &analyzed
+
+	_, err = a.db.AnalyzeExperiment(context.Background(), experiment)
+	if err != nil {
+		fail("cannot continue experiment", err)
+		return
+	}
+
+	nextTaskID := uuid.NewString()
+	tasks.Store(nextTaskID, &TaskStatus{Progress: 0, Done: false})
+
+	go a.generateImage(nextTaskID, parsed, *experiment)
+
+	task.Progress = 100
+	task.Done = true
+	task.Result = parsed
+	task.NextTaskId = nextTaskID
 }
 
 func (a *api) generateImage(taskID string, specimen map[string]any, experiment Experiment) {
@@ -338,17 +358,49 @@ func (a *api) generateImage(taskID string, specimen map[string]any, experiment E
 
 	prompt, promptOk := specimen["RENDER_DIRECTIVE"]
 	profile, profileOk := specimen["MONSTER_PROFILE"].(map[string]any)
-	name, nameOk := profile["name"]
-	description, descriptionOk := profile["lore"]
-	if !promptOk || !profileOk || !nameOk || !descriptionOk {
+	if !promptOk || !profileOk {
 		fail("cannot parse speciment", fmt.Errorf("donno"))
 		return
 	}
 
+	getProfileField := func(profile map[string]any, key string) string {
+		if value, ok := profile[key].(string); ok && value != "" {
+			return value
+		}
+
+		fallbacks := map[string]string{
+			"name":           "Unnamed Creature",
+			"species":        "Mysterious Species",
+			"lore":           "Its origins are lost to time",
+			"movement_class": "Unknown Locomotion",
+			"behaviour":      "Behavior undocumented",
+			"personality":    "Enigmatic",
+			"abilities":      "Abilities yet to be discovered",
+			"habitat":        "Habitat unknown",
+			"description":    "A creature of mystery",
+		}
+
+		if fallback, ok := fallbacks[key]; ok {
+			return fallback
+		}
+
+		return "Not specified"
+	}
+
+	name := getProfileField(profile, "name")
+	species := getProfileField(profile, "species")
+	lore := getProfileField(profile, "lore")
+	movementClass := getProfileField(profile, "movement_class")
+	behaviour := getProfileField(profile, "behaviour")
+	personality := getProfileField(profile, "personality")
+	abilities := getProfileField(profile, "abilities")
+	habitat := getProfileField(profile, "habitat")
+	// description := getProfileField(profile, "description")
+
 	requestBody := map[string]any{
 		"model":      "gpt-image-1",
 		"n":          1,
-		"size":       "1024x1536",
+		"size":       "1024x1024",
 		"quality":    "medium",
 		"prompt":     prompt,
 		"moderation": "low",
@@ -359,7 +411,7 @@ func (a *api) generateImage(taskID string, specimen map[string]any, experiment E
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodPost, OpenAIGenerationURL, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequest(http.MethodPost, OPENAI_GENERATION_URL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		fail("cannot create request", err)
 		return
@@ -407,16 +459,26 @@ func (a *api) generateImage(taskID string, specimen map[string]any, experiment E
 
 	defer close(uploadChan)
 
-	imageCid, err := uploadImageToPinata(a.cfg.Pinata.PinataToken, base64Image, name.(string))
+	imageCid, err := uploadImageToPinata(a.cfg.Pinata.PinataToken, base64Image, name)
 	if err != nil {
 		fail("cannot upload image to ipfs", err)
 		return
 	}
 
+	stats, err := a.db.SelectRarities(context.Background())
+	if err != nil {
+		fail("cannot select rarities", err)
+		return
+	}
+
+	rarity := stats.PickRarity(StoneAmazonite)
+
+	experiment.Rarity = rarity
+
 	metadataBody := map[string]any{
 		"name":                    name,
 		"symbol":                  "MON",
-		"description":             description,
+		"description":             "d",
 		"image":                   fmt.Sprintf("ipfs://%s", imageCid),
 		"external_url":            "https://borflab.com/cards",
 		"seller_fee_basis_points": 0,
@@ -453,6 +515,13 @@ func (a *api) generateImage(taskID string, specimen map[string]any, experiment E
 					"verified": true,
 				},
 			},
+			"species":        species,
+			"lore":           lore,
+			"movement_class": movementClass,
+			"behaviour":      behaviour,
+			"personality":    personality,
+			"abilities":      abilities,
+			"habitat":        habitat,
 		},
 	}
 
@@ -470,15 +539,6 @@ func (a *api) generateImage(taskID string, specimen map[string]any, experiment E
 
 	uploaded := time.Now().UTC()
 
-	stats, err := a.db.SelectRarities(context.Background())
-	if err != nil {
-		fail("cannot select rarities", err)
-		return
-	}
-
-	rarity := stats.PickRarity(StoneTanzanite)
-
-	experiment.Rarity = rarity
 	experiment.ImageCID = imageCid
 	experiment.MetadataCID = metadataCid
 	experiment.Metadata = metadata
@@ -517,6 +577,12 @@ func (a *api) Progress(w *Responder, r *http.Request) {
 
 func (a *api) PrepareMint(w *Responder, r *http.Request) {
 
+	form := &mintForm{}
+	if err := ParseBody(r, &form); err != nil {
+		a.BadRequestError(w, err)
+		return
+	}
+
 	experimentId := Param(r)
 
 	experiment, err := a.db.SelectExperiment(r.Context(), experimentId)
@@ -539,235 +605,79 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 	}
 
 	name := profile["name"].(string)
-	description := profile["personality"].(string)
-	biome := experiment.Biome
-	rarity := experiment.Rarity
+	description := "d" // profile["personality"].(string)
+	biome := string(experiment.Biome)
+	rarity := string(experiment.Rarity)
 	uri := fmt.Sprintf("ipfs://%s", experiment.MetadataCID)
+	user_id := 12345
+	experiment_id := experiment.Id
+	fmt.Println(biome)
+	fmt.Println(rarity)
+	// === SOLANA logic ===
 
-	// === SOLANA LOGIC ===
+	// 1. Prepare keys
 	ctx := context.Background()
-	programId, _ := solana.PublicKeyFromBase58(a.cfg.Solana.ProgramId)
-	adminPublicKey, _ := solana.PublicKeyFromBase58(a.cfg.Solana.AdminPublicKey)
-	treasuryPda, _ := solana.PublicKeyFromBase58(a.cfg.Solana.TreasuryPda)
-	cardCollection, _ := solana.PublicKeyFromBase58(a.cfg.Solana.CardCollection)
-	stoneCollection, _ := solana.PublicKeyFromBase58(a.cfg.Solana.StoneCollection)
-	updateAuthority, _ := solana.PublicKeyFromBase58(a.cfg.Solana.CollectionUpdateAuthority)
-
-	userPubkey, err := solana.PublicKeyFromBase58(r.FormValue("userPubkey"))
+	programId, err := solana.PublicKeyFromBase58(a.cfg.Solana.ProgramId)
 	if err != nil {
-		a.InternalError(w, fmt.Errorf("invalid userPubkey: %v", err))
+		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
 		return
 	}
-
-	mint := solana.NewWallet()
-	mintPubKey := mint.PublicKey()
-	// PDAs
-	tokenMetadataProgramID := solana.MustPublicKeyFromBase58("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s")
-	stoneStateSeed := [][]byte{[]byte("stone_state"), stoneCollection.Bytes()}
-	stoneState, _, _ := solana.FindProgramAddress(stoneStateSeed, programId)
-	stoneOwnerATA, _, _ := solana.FindAssociatedTokenAddress(userPubkey, stoneCollection)
-	cardTypeSeed := [][]byte{[]byte("card_type")}
-	cardType, _, _ := solana.FindProgramAddress(cardTypeSeed, programId)
-	cardStateSeed := [][]byte{[]byte("card_state"), mintPubKey.Bytes()}
-	cardState, _, _ := solana.FindProgramAddress(cardStateSeed, programId)
-	cardCollectionMetadata, _, _ := solana.FindProgramAddress(
-		[][]byte{
-			[]byte("metadata"),
-			tokenMetadataProgramID.Bytes(),
-			cardCollection.Bytes(),
-		},
-		tokenMetadataProgramID,
-	)
-	cardCollectionMasterEdition, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramID.Bytes(), cardCollection.Bytes(), []byte("edition")},
-		tokenMetadataProgramID,
-	)
-	collectionAuthority, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("collection_authority")},
-		programId,
-	)
-	metadata, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramID.Bytes(), mintPubKey.Bytes()},
-		tokenMetadataProgramID,
-	)
-	masterEdition, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramID.Bytes(), mintPubKey.Bytes(), []byte("edition")},
-		tokenMetadataProgramID,
-	)
-
-	ownerATA, _, _ := solana.FindAssociatedTokenAddress(userPubkey, mintPubKey)
-
-	discriminator := []byte{4, 182, 83, 217, 232, 35, 33, 64}
-	dataBuf := &bytes.Buffer{}
-	dataBuf.Write(discriminator)
-
-	writeStringBorsh := func(buf *bytes.Buffer, s string) {
-		b := []byte(s)
-		_ = binary.Write(buf, binary.LittleEndian, uint32(len(b)))
-		buf.Write(b)
-	}
-
-	writeStringBorsh(dataBuf, name)
-	writeStringBorsh(dataBuf, description)
-	writeStringBorsh(dataBuf, string(biome))
-	writeStringBorsh(dataBuf, string(rarity))
-	writeStringBorsh(dataBuf, uri)
-
-	// account metas
-	metas := []*solana.AccountMeta{
-		solana.NewAccountMeta(mintPubKey, true, false),
-		solana.NewAccountMeta(userPubkey, true, true),
-		solana.NewAccountMeta(ownerATA, true, false),
-		solana.NewAccountMeta(adminPublicKey, false, true),
-		solana.NewAccountMeta(stoneCollection, false, false),
-		solana.NewAccountMeta(stoneOwnerATA, true, false),
-		solana.NewAccountMeta(stoneState, true, false),
-		solana.NewAccountMeta(cardType, true, false),
-		solana.NewAccountMeta(cardState, true, false),
-		solana.NewAccountMeta(treasuryPda, false, false),
-		solana.NewAccountMeta(cardCollection, false, false),
-		solana.NewAccountMeta(cardCollectionMetadata, true, false),
-		solana.NewAccountMeta(cardCollectionMasterEdition, true, false),
-		solana.NewAccountMeta(metadata, true, false),
-		solana.NewAccountMeta(masterEdition, true, false),
-		solana.NewAccountMeta(collectionAuthority, false, true),
-		solana.NewAccountMeta(updateAuthority, false, false),
-		solana.NewAccountMeta(solana.TokenProgramID, false, false),
-		solana.NewAccountMeta(solana.SPLAssociatedTokenAccountProgramID, false, false),
-		solana.NewAccountMeta(solana.SystemProgramID, false, false),
-		solana.NewAccountMeta(tokenMetadataProgramID, false, false),
-		solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),
-	}
-
-	inst := solana.NewInstruction(programId, metas, dataBuf.Bytes())
-
-	rpcClient := rpc.New(rpc.DevNet_RPC)
-	rb, _ := rpcClient.GetRecentBlockhash(ctx, rpc.CommitmentConfirmed)
-	tx, _ := solana.NewTransaction(
-		[]solana.Instruction{inst},
-		rb.Value.Blockhash,
-		solana.TransactionPayer(userPubkey),
-	)
-
-	txBytes, err := tx.MarshalBinary()
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot marshal tx: %v", err))
-		return
-	}
-	partiallySigned := base64.StdEncoding.EncodeToString(txBytes)
-
-	w.Send(map[string]string{
-		"partiallySignedTx": partiallySigned,
-	})
-
-}
-
-func (a *api) TestMint(w http.ResponseWriter, r *http.Request) {
-
-	tokenMetadataProgramId, _ := solana.PublicKeyFromBase58("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s")
-
-	const (
-		name        = "Jimmy"
-		description = "A test monster"
-		biome       = "Canopica"
-		rarity      = "Rare"
-		uri         = "ipfs://QmbX5G8Fs5QBxHhekdCe7mixf4i7uRPReVUVzSCANAUdXz"
-	)
-
-	CARD_COLLECTION_MINT := "7Qiemkwe7DKxxFHHoZn3FSRd9Jfr8XueZx96rCUaFKhM"
-
-	client := rpc.New("https://api.devnet.solana.com")
-
-	idlData, err := os.ReadFile("borflab_chain.json")
-	if err != nil {
-		fmt.Printf("failed to read IDL file: %v", err)
-		return
-	}
-
-	var idl map[string]any
-	if err := json.Unmarshal(idlData, &idl); err != nil {
-		fmt.Printf("failed to parse IDL JSON: %v", err)
-		return
-	}
-
-	programId, _ := solana.PublicKeyFromBase58(a.cfg.Solana.ProgramId)
-
-	walletPubKey, err := solana.PublicKeyFromBase58("GfJK6FM3U94RZ1o5tJgJEFzKeAFZdicCWo1dUHNLUZaW")
+	userPubKey, err := solana.PublicKeyFromBase58(form.UserPubKey)
 	if err != nil {
 		fmt.Printf("invalid wallet public key: %v", err)
 		return
 	}
-
-	fmt.Printf("👤 Wallet (Owner) address: %s\n", walletPubKey.String())
-
-	balance, err := client.GetBalance(context.Background(), walletPubKey, rpc.CommitmentConfirmed)
+	cardCollectionPubKey, err := solana.PublicKeyFromBase58(a.cfg.Solana.CardCollectionPubKey)
 	if err != nil {
-		fmt.Printf("failed to get balance: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
 		return
 	}
-	fmt.Printf("   Balance: %.4f SOL\n", float64(balance.Value)/1e9)
+	stonePubKey, err := solana.PublicKeyFromBase58(form.StonePubKey)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
+		return
+	}
+	tokenMetadataProgramId, err := solana.PublicKeyFromBase58(TOKEN_METADATA_PROGRAM_ID)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
+		return
+	}
 
 	keyData, err := os.ReadFile("admin_keypair.json")
 	if err != nil {
-		fmt.Printf("failed to read admin key file: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot read keypair file: %v", err))
 		return
 	}
 
 	var secretKey []uint8
 	if err := json.Unmarshal(keyData, &secretKey); err != nil {
-		fmt.Printf("failed to parse admin key JSON: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot parse keypair file: %v", err))
 		return
 	}
 
 	adminPrivateKey := solana.PrivateKey(secretKey)
-	if err != nil {
-		fmt.Printf("failed to create admin key: %v", err)
+	if err := adminPrivateKey.Validate(); err != nil {
+		a.InternalError(w, fmt.Errorf("invalid admin key"))
 		return
 	}
 
-	fmt.Printf("👑 Admin Wallet (Authority) address: %s\n", adminPrivateKey.PublicKey().String())
+	// 2. Find PDAs
 
-	adminBalance, err := client.GetBalance(context.Background(), adminPrivateKey.PublicKey(), rpc.CommitmentConfirmed)
-	if err != nil {
-		fmt.Printf("failed to get admin balance: %v", err)
-		return
-	}
-
-	fmt.Printf("   Balance: %.4f SOL\n", float64(adminBalance.Value)/1e9)
-
-	cardCollectionMint, err := solana.PublicKeyFromBase58(CARD_COLLECTION_MINT)
-	if err != nil {
-		fmt.Printf("invalid collection mint: %v", err)
-		return
-	}
-
-	stoneMintStr := "GDGcseTzdjakdtHqrDzs8wGtZvjANMjQMXjjJRD7vYTs"
-
-	stoneMint, err := solana.PublicKeyFromBase58(stoneMintStr)
-	if err != nil {
-		fmt.Printf("invalid stone mint: %v", err)
-		return
-	}
-
-	fmt.Printf("🪨 Stone Info:\n")
-	fmt.Printf("   Stone Mint: %s\n", stoneMint.String())
-
-	// Find PDAs
 	cardTypePda, _, err := solana.FindProgramAddress(
 		[][]byte{[]byte("card_type")},
 		programId,
 	)
 	if err != nil {
-		fmt.Printf("failed to find card type PDA: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
 		return
 	}
 
 	stoneStatePda, _, err := solana.FindProgramAddress(
-		[][]byte{[]byte("stone_state"), stoneMint.Bytes()},
+		[][]byte{[]byte("stone_state"), stonePubKey.Bytes()},
 		programId,
 	)
 	if err != nil {
-		fmt.Printf("failed to find stone state PDA: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
 		return
 	}
 
@@ -776,7 +686,7 @@ func (a *api) TestMint(w http.ResponseWriter, r *http.Request) {
 		programId,
 	)
 	if err != nil {
-		fmt.Printf("failed to find collection authority PDA: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
 		return
 	}
 
@@ -785,187 +695,188 @@ func (a *api) TestMint(w http.ResponseWriter, r *http.Request) {
 		programId,
 	)
 	if err != nil {
-		fmt.Printf("failed to find card mint admin PDA: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
 		return
 	}
 
-	fmt.Printf("🔑 PDAs:\n")
-	fmt.Printf("   Card Type: %s\n", cardTypePda.String())
-	fmt.Printf("   Stone State: %s\n", stoneStatePda.String())
-	fmt.Printf("   Collection Authority: %s\n", collectionAuthorityPda.String())
-	fmt.Printf("   Card Mint Admin: %s\n", cardMintAdminPda.String())
-	fmt.Printf("\n")
-
-	fmt.Printf("🔐 Card Mint Admin Verification:\n")
-
-	accountInfo, err := client.GetAccountInfo(context.Background(), cardMintAdminPda)
+	// 3. Admin verification
+	adminAccount, err := a.solanaAgent.rpcClient.GetAccountInfoWithOpts(
+		ctx,
+		cardMintAdminPda,
+		&rpc.GetAccountInfoOpts{
+			Commitment: rpc.CommitmentConfirmed,
+		},
+	)
 	if err != nil {
-		fmt.Printf("❌ Error: Card mint admin not registered!: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot get admin account: %v", err))
 		return
 	}
 
-	if accountInfo == nil || accountInfo.Value == nil {
-		fmt.Printf("❌ Error: Card mint admin account not found!")
+	if adminAccount == nil || adminAccount.Value == nil || len(adminAccount.Value.Data.GetBinary()) < 32 {
+		a.InternalError(w, fmt.Errorf("cannot validate admin account: %v", err))
 		return
 	}
 
-	if len(accountInfo.Value.Data.GetBinary()) < 32 {
-		fmt.Printf("❌ Error: Invalid card mint admin account data")
-		return
-	}
-
-	registeredAdmin := solana.PublicKeyFromBytes(accountInfo.GetBinary()[8:40])
+	registeredAdmin := solana.PublicKeyFromBytes(adminAccount.GetBinary()[8:40])
 	if err != nil {
-		fmt.Printf("❌ Error: Failed to parse registered admin: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
 		return
 	}
-
-	fmt.Printf("   Registered Admin: %s\n", registeredAdmin.String())
-	fmt.Printf("   Provided Admin: %s\n", adminPrivateKey.PublicKey().String())
 
 	if !registeredAdmin.Equals(adminPrivateKey.PublicKey()) {
-		fmt.Printf("❌ Error: The provided admin keypair is not registered as card mint admin!")
+		a.InternalError(w, fmt.Errorf("unauthorized admin keypair"))
 		return
 	}
 
-	fmt.Printf("   ✅ Admin verified!\n")
-	fmt.Printf("\n")
+	// 4. Stone state verification
 
-	// Check stone state
-	fmt.Printf("⚡ Stone State:\n")
-
-	stoneStateAccount, err := client.GetAccountInfo(context.Background(), stoneStatePda)
-	if err != nil || stoneStateAccount == nil || stoneStateAccount.Value == nil {
-		fmt.Printf("❌ Error: Could not fetch stone state. Make sure the stone exists and is minted.")
+	stoneStateAccount, err := a.solanaAgent.rpcClient.GetAccountInfoWithOpts(
+		ctx,
+		stoneStatePda,
+		&rpc.GetAccountInfoOpts{
+			Commitment: rpc.CommitmentConfirmed,
+		},
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot get stone state account: %v", err))
+		return
+	}
+	if stoneStateAccount == nil || stoneStateAccount.Value == nil {
+		a.InternalError(w, fmt.Errorf("cannot validate stone state account: %v", err))
+		return
+	}
+	stoneState := stoneStateAccount.Value.Data.GetBinary()
+	if len(stoneState) < 2 {
+		a.InternalError(w, fmt.Errorf("stone state data too short"))
 		return
 	}
 
-	stoneStateData := stoneStateAccount.Value.Data.GetBinary()
-	if len(stoneStateData) < 2 {
-		fmt.Printf("❌ Error: Invalid stone state data")
+	sparksRemaining := binary.LittleEndian.Uint16(stoneState[32:34])
+
+	if sparksRemaining <= 0 {
+		a.BadRequestError(w, fmt.Errorf("selected stone has no sparks"))
 		return
 	}
 
-	sparksRemaining := binary.LittleEndian.Uint16(stoneStateData[0:2])
-	fmt.Printf("   Sparks Remaining: %d/42\n", sparksRemaining)
+	// 5. Card verification
 
-	if sparksRemaining == 0 {
-		fmt.Printf("❌ Error: Stone has no sparks remaining!")
+	cardTypeAccount, err := a.solanaAgent.rpcClient.GetAccountInfoWithOpts(
+		ctx,
+		cardTypePda,
+		&rpc.GetAccountInfoOpts{
+			Commitment: rpc.CommitmentConfirmed,
+		},
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot get card type account: %v", err))
 		return
 	}
 
-	fmt.Printf("🃏 Card Type:\n")
-
-	cardTypeAccount, err := client.GetAccountInfo(context.Background(), cardTypePda)
-	if err != nil || cardTypeAccount == nil || cardTypeAccount.Value == nil {
-		fmt.Printf("❌ Error: Card type not initialized")
+	if cardTypeAccount == nil || cardTypeAccount.Value == nil {
+		a.InternalError(w, fmt.Errorf("cannot validate card type account: %v", err))
 		return
 	}
-
 	cardTypeData := cardTypeAccount.Value.Data.GetBinary()
 	if len(cardTypeData) < 8 {
-		fmt.Printf("❌ Error: Invalid card type data")
+		a.InternalError(w, fmt.Errorf("card type too short"))
 		return
 	}
 
 	mintedCount := binary.LittleEndian.Uint32(cardTypeData[0:4])
 	supplyCap := binary.LittleEndian.Uint32(cardTypeData[4:8])
 
-	fmt.Printf("   Minted: %d/%d\n", mintedCount, supplyCap)
-
 	if mintedCount >= supplyCap {
-		fmt.Printf("❌ Error: Card supply cap reached!")
+		a.BadRequestError(w, fmt.Errorf("card supply cap reached"))
 		return
 	}
 
-	// Generate new mint
+	// 6. Generate new mint
 	mint := solana.NewWallet()
 	mintPubKey := mint.PublicKey()
 
-	fmt.Printf("🆕 New Card NFT:\n")
-	fmt.Printf("   Mint address: %s\n", mintPubKey.String())
-	fmt.Printf("   Name: %s\n", name)
-	fmt.Printf("   Description: %s\n", description)
-	fmt.Printf("   Biome: %s\n", biome)
-	fmt.Printf("   Rarity: %s\n", rarity)
-	fmt.Printf("   URI: %s\n", uri)
-	fmt.Printf("\n")
-
-	// Find all required accounts
-	ownerAta, _, err := solana.FindAssociatedTokenAddress(walletPubKey, mintPubKey)
-	if err != nil {
-		fmt.Printf("failed to find owner ATA: %v", err)
-		return
-	}
-
-	stoneOwnerAta, _, err := solana.FindAssociatedTokenAddress(walletPubKey, stoneMint)
-	if err != nil {
-		fmt.Printf("failed to find stone owner ATA: %v", err)
-		return
-	}
-
-	// Card State PDA
 	cardStatePda, _, err := solana.FindProgramAddress(
 		[][]byte{[]byte("card_state"), mintPubKey.Bytes()},
 		programId,
 	)
 	if err != nil {
-		fmt.Printf("failed to find card state PDA: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
 		return
 	}
 
-	// Metaplex PDAs
+	// 7. Find ATAs
+	ownerAta, _, err := solana.FindAssociatedTokenAddress(userPubKey, mintPubKey)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find owner ATA: %v", err))
+		return
+	}
+
+	stoneOwnerAta, _, err := solana.FindAssociatedTokenAddress(userPubKey, stonePubKey)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find stone owner ATA: %v", err))
+		return
+	}
+
+	// 8. Find metaplex PDAs
 	metadata, _, err := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), mintPubKey.Bytes()},
+		[][]byte{
+			[]byte("metadata"),
+			tokenMetadataProgramId.Bytes(),
+			mintPubKey.Bytes(),
+		},
 		tokenMetadataProgramId,
 	)
 	if err != nil {
-		fmt.Printf("failed to find metadata PDA: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
 		return
 	}
 
 	masterEdition, _, err := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), mintPubKey.Bytes(), []byte("edition")},
+		[][]byte{
+			[]byte("metadata"),
+			tokenMetadataProgramId.Bytes(),
+			mintPubKey.Bytes(),
+			[]byte("edition"),
+		},
 		tokenMetadataProgramId,
 	)
 	if err != nil {
-		fmt.Printf("failed to find master edition PDA: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
 		return
 	}
 
 	collectionMetadata, _, err := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), cardCollectionMint.Bytes()},
+		[][]byte{
+			[]byte("metadata"),
+			tokenMetadataProgramId.Bytes(),
+			cardCollectionPubKey.Bytes()},
 		tokenMetadataProgramId,
 	)
 	if err != nil {
-		fmt.Printf("failed to find collection metadata PDA: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
 		return
 	}
 
 	collectionMasterEdition, _, err := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), cardCollectionMint.Bytes(), []byte("edition")},
+		[][]byte{
+			[]byte("metadata"),
+			tokenMetadataProgramId.Bytes(),
+			cardCollectionPubKey.Bytes(),
+			[]byte("edition"),
+		},
 		tokenMetadataProgramId,
 	)
 	if err != nil {
-		fmt.Printf("failed to find collection master edition PDA: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
 		return
 	}
 
-	fmt.Printf("📦 Additional accounts:\n")
-	fmt.Printf("   Owner ATA: %s\n", ownerAta.String())
-	fmt.Printf("   Stone Owner ATA: %s\n", stoneOwnerAta.String())
-	fmt.Printf("   Card State: %s\n", cardStatePda.String())
-	fmt.Printf("   Metadata: %s\n", metadata.String())
-	fmt.Printf("   Master Edition: %s\n", masterEdition.String())
-	fmt.Printf("   collectionMasterEdition: %s\n", collectionMasterEdition.String())
-	fmt.Printf("   collectionMetadata: %s\n", collectionMetadata.String())
-	fmt.Printf("\n")
-
-	fmt.Printf("⏳ Creating mint account...\n")
-
-	mintRent, err := client.GetMinimumBalanceForRentExemption(context.Background(), 82, rpc.CommitmentConfirmed)
+	mintRent, err := a.solanaAgent.rpcClient.GetMinimumBalanceForRentExemption(
+		ctx,
+		82,
+		rpc.CommitmentConfirmed,
+	)
 	if err != nil {
-		fmt.Printf("failed to get mint rent: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot get mint rent: %v", err))
 		return
 	}
 
@@ -973,7 +884,7 @@ func (a *api) TestMint(w http.ResponseWriter, r *http.Request) {
 		mintRent,
 		82,
 		solana.TokenProgramID,
-		walletPubKey,
+		userPubKey,
 		mintPubKey,
 	).Build()
 
@@ -981,16 +892,16 @@ func (a *api) TestMint(w http.ResponseWriter, r *http.Request) {
 		programId,
 		[]*solana.AccountMeta{
 			solana.NewAccountMeta(mintPubKey, true, false),
-			solana.NewAccountMeta(walletPubKey, true, true),
+			solana.NewAccountMeta(userPubKey, true, true),
 			solana.NewAccountMeta(ownerAta, true, false),
 			solana.NewAccountMeta(adminPrivateKey.PublicKey(), false, true),
 			solana.NewAccountMeta(cardMintAdminPda, false, false),
-			solana.NewAccountMeta(stoneMint, false, false),
+			solana.NewAccountMeta(stonePubKey, false, false),
 			solana.NewAccountMeta(stoneOwnerAta, true, false),
 			solana.NewAccountMeta(stoneStatePda, true, false),
 			solana.NewAccountMeta(cardTypePda, true, false),
 			solana.NewAccountMeta(cardStatePda, true, false),
-			solana.NewAccountMeta(cardCollectionMint, false, false),
+			solana.NewAccountMeta(cardCollectionPubKey, false, false),
 			solana.NewAccountMeta(collectionMetadata, true, false),
 			solana.NewAccountMeta(collectionMasterEdition, true, false),
 			solana.NewAccountMeta(metadata, true, false),
@@ -1002,14 +913,14 @@ func (a *api) TestMint(w http.ResponseWriter, r *http.Request) {
 			solana.NewAccountMeta(tokenMetadataProgramId, false, false),
 			solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),
 		},
-		encodeMintCardInstructionData(name, description, biome, rarity, uri),
+		encodeMintCardInstructionData(name, description, biome, rarity, uri, user_id, experiment_id),
 	)
 
 	computeBudgetIx := computebudget.NewSetComputeUnitLimitInstruction(300000).Build()
 
-	recent, err := client.GetLatestBlockhash(context.Background(), rpc.CommitmentFinalized)
+	recent, err := a.solanaAgent.rpcClient.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
 	if err != nil {
-		fmt.Printf("failed to get recetn blockhash: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot get latest blockhash: %v", err))
 		return
 	}
 
@@ -1022,11 +933,11 @@ func (a *api) TestMint(w http.ResponseWriter, r *http.Request) {
 	tx, err := solana.NewTransaction(
 		instructions,
 		recent.Value.Blockhash,
-		solana.TransactionPayer(walletPubKey),
+		solana.TransactionPayer(userPubKey),
 	)
 
 	if err != nil {
-		fmt.Printf("failed to create new transaction: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot create transaction: %v", err))
 		return
 	}
 
@@ -1042,32 +953,38 @@ func (a *api) TestMint(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	if err != nil {
-		fmt.Printf("failed to sign transaction: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot sign transaction: %v", err))
 		return
 	}
 
 	txBytes, err := tx.MarshalBinary()
 	if err != nil {
-		fmt.Printf("failed to marshal transaction: %v", err)
+		a.InternalError(w, fmt.Errorf("cannot marshal transaction: %v", err))
 		return
 	}
 
 	txBase64 := base64.StdEncoding.EncodeToString(txBytes)
 
-	response := map[string]string{
-		"transaction": txBase64,
-		"status":      "success",
+	response := struct {
+		TxBase64 string
+	}{
+		TxBase64: txBase64,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	w.Send(response)
+
 }
 
-func encodeMintCardInstructionData(name, description, biome, rarity, uri string) []byte {
+func encodeMintCardInstructionData(name, description, biome, rarity, uri string, user_id, experiment_id int) []byte {
 	encodeAnchorString := func(s string) []byte {
 		buf := make([]byte, 4+len(s))
 		binary.LittleEndian.PutUint32(buf[0:4], uint32(len(s)))
 		copy(buf[4:], []byte(s))
+		return buf
+	}
+	encodeAnchorInt := func(i int) []byte {
+		buf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buf, uint32(i))
 		return buf
 	}
 
@@ -1081,6 +998,8 @@ func encodeMintCardInstructionData(name, description, biome, rarity, uri string)
 	data = append(data, encodeAnchorString(biome)...)
 	data = append(data, encodeAnchorString(rarity)...)
 	data = append(data, encodeAnchorString(uri)...)
+	data = append(data, encodeAnchorInt(user_id)...)
+	data = append(data, encodeAnchorInt(experiment_id)...)
 
 	return data
 }
@@ -1166,7 +1085,7 @@ func uploadImageToPinata(pinataJWT string, base64Image string, fileName string) 
 	}
 	writer.Close()
 
-	req, err := http.NewRequest("POST", PinataPinFileUrl, body)
+	req, err := http.NewRequest("POST", PINATA_PIN_FILE_URL, body)
 	if err != nil {
 		return "", err
 	}
@@ -1187,7 +1106,7 @@ func uploadImageToPinata(pinataJWT string, base64Image string, fileName string) 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Pinata API refused %d: %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("pinata API refused %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var parsed struct {
@@ -1225,7 +1144,7 @@ func uploadMetadataToPinata(pinataJWT string, metadata map[string]any) (string, 
 
 	writer.Close()
 
-	req, err := http.NewRequest("POST", PinataPinFileUrl, body)
+	req, err := http.NewRequest("POST", PINATA_PIN_FILE_URL, body)
 	if err != nil {
 		return "", err
 	}
@@ -1246,7 +1165,7 @@ func uploadMetadataToPinata(pinataJWT string, metadata map[string]any) (string, 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Pinata API refused %d: %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("pinata API refused %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var parsed struct {
