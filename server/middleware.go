@@ -102,7 +102,7 @@ func (m *Middleware) RequireAuth(next func(*Responder, *http.Request)) http.Hand
 
 		rw, ok := w.(*Responder)
 		if !ok {
-			LogError("Middleware", "Cannot cast w into Responder", nil)
+			LogError("Mddlwr", "Cannot cast w into Responder", nil)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
@@ -135,7 +135,7 @@ func (m *Middleware) RequireAuth(next func(*Responder, *http.Request)) http.Hand
 			},
 		)
 		if err != nil {
-			LogError("Middleware", "Cannot parse JWT", err)
+			LogError("Mddlwr", "Cannot parse JWT", err)
 			rw.SendUnauthorized()
 			return
 		}
@@ -143,13 +143,13 @@ func (m *Middleware) RequireAuth(next func(*Responder, *http.Request)) http.Hand
 		claims, ok := token.Claims.(*PrivyClaims)
 
 		if !ok {
-			LogError("Middleware", "Cannot cast claims", err)
+			LogError("Mddlwr", "Cannot cast claims", err)
 			rw.SendUnauthorized()
 			return
 		}
 
 		if err := claims.Valid(m.cfg.AppId); err != nil {
-			LogError("Middleware", "Cannot validate JWT", err)
+			LogError("Mddlwr", "Cannot validate JWT", err)
 			rw.SendUnauthorized()
 			return
 		}

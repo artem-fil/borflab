@@ -84,7 +84,7 @@ create table if not exists stones (
 create table if not exists monsters (
     id serial primary key,
     user_id text not null references users(privy_id) on delete cascade,
-    experiment_id text not null references experiments(id),
+    experiment_id int not null references experiments(id),
     mint_address varchar(44) unique not null,
     owner_address varchar(44) not null,
     stone_mint_address varchar(44) not null,
@@ -115,28 +115,22 @@ create table if not exists monsters (
     created timestamptz default now()
 );
 
+create table solana_notifications ( 
+  id serial primary key, 
+  signature text not null, 
+  slot bigint not null, 
+  stage text not null,
+  logs text[],
+  events jsonb,
+  created timestamptz default now()
+);
+
 create table solana_events (
     id serial primary key,
-    signature text not null,
-    slot bigint not null,
-    stage text not null,
-    error text,
-    type text,
-    raw_input jsonb,
-    program_data bytea,
+    notification_id int not null references solana_notifications(id) on delete cascade,
+    program_data bytea not null,
+    event_type text,
     payload jsonb,
-
-    created timestamptz default now(),
-
-    check (stage != 'done' or payload is not null),
-
-    check (
-        (stage <> 'done' and raw_input is not null)
-        or (stage = 'done' and raw_input is null)
-    ),
-
-    check (
-        (stage <> 'done' and error is not null)
-        or (stage = 'done' and error is null)
-    )
+    error text,
+    created timestamptz default now()
 );

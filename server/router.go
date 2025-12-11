@@ -7,7 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -31,6 +30,7 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	router := &Router{mux: mux}
 
 	router.Handle("GET", "/stones", mddlwr.RequireAuth(api.GetStones))
+	router.Handle("GET", "/monsters", mddlwr.RequireAuth(api.GetMonsters))
 	router.Handle("POST", "/users/sync", mddlwr.RequireAuth(api.SyncUser))
 	router.Handle("POST", "/analyze", mddlwr.RequireAuth(api.AnalyzeSpecimen))
 	router.Handle("GET", "/progress/:id", mddlwr.RequireAuth(api.Progress))
@@ -115,19 +115,23 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if req.Method != http.MethodOptions {
-		id := atomic.AddUint64(&requestIdCounter, 1)
+		// id := atomic.AddUint64(&requestIdCounter, 1)
 
 		code := strconv.Itoa(rw.StatusCode)
+		var level string
 		if rw.StatusCode >= 200 && rw.StatusCode < 300 {
 			code = "\033[32m" + code + "\033[0m"
+			level = "[INFO]: "
 		} else {
 			code = "\033[31m" + code + "\033[0m"
+			level = "\033[31m[ERROR]\033[0m:"
 		}
-
+		module := "API"
 		logLine := fmt.Sprintf(
-			"%s | %06d | %s | %s | %-6s | %s | %s",
+			"%s %s %-8s | %s | %s | %-6s | %s | %s",
 			start.Format("02-01-2006 15:04:05"),
-			id,
+			level,
+			module,
 			accessLogDuration(time.Since(start)),
 			code,
 			req.Method,

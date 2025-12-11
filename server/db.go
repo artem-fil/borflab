@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 type DB struct {
@@ -154,6 +155,97 @@ from stones where user_id = $1
 	}
 
 	return stones, nil
+}
+
+func (db *DB) SelectMonsters(ctx context.Context, userId string, limit int, offset int, sort string, order string) ([]Monster, int, error) {
+	var monsters []Monster
+	var total int
+
+	countQuery := `select count(*) from monsters where user_id = $1`
+	err := db.Conn.QueryRowContext(ctx, countQuery, userId).Scan(&total)
+	if err != nil {
+		return monsters, 0, err
+	}
+
+	if total == 0 {
+		return monsters, 0, nil
+	}
+
+	sortOrder := fmt.Sprintf("%s %s", sort, order)
+
+	rows, err := db.Conn.QueryContext(
+		ctx,
+		`
+select
+	id,
+	user_id,
+	experiment_id,
+	mint_address,
+	owner_address,
+	stone_mint_address,
+	card_state_address,
+	name,
+	species,
+	lore,
+	movement_class,
+	behaviour,
+	personality,
+	abilities,
+	habitat,
+	biome,
+	rarity,
+	metadata_uri,
+	image_cid,
+	serial_number,
+	generation,
+	signature,
+	slot,
+	minted,
+	created
+from monsters where user_id = $1 order by $2 limit $3 offset $4;`,
+		userId, sortOrder, limit, offset,
+	)
+	if err != nil {
+		return monsters, 0, err
+
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var monster Monster
+		err := rows.Scan(
+			&monster.Id,
+			&monster.UserId,
+			&monster.ExperimentId,
+			&monster.MintAddress,
+			&monster.OwnerAddress,
+			&monster.StoneMintAddress,
+			&monster.CardStateAddress,
+			&monster.Name,
+			&monster.Species,
+			&monster.Lore,
+			&monster.MovementClass,
+			&monster.Behaviour,
+			&monster.Personality,
+			&monster.Abilities,
+			&monster.Habitat,
+			&monster.Biome,
+			&monster.Rarity,
+			&monster.MetadataUri,
+			&monster.ImageCid,
+			&monster.SerialNumber,
+			&monster.Generation,
+			&monster.Signature,
+			&monster.Slot,
+			&monster.Minted,
+			&monster.Created,
+		)
+		if err != nil {
+			return monsters, 0, err
+		}
+		monsters = append(monsters, monster)
+	}
+	return monsters, total, err
 }
 
 func (db *DB) SelectExperiment(ctx context.Context, id string) (*Experiment, error) {
@@ -342,28 +434,27 @@ select
 	return stats, err
 }
 
-func (db *DB) InsertSolanaEvent(ctx context.Context, e *SolanaEvent) (sql.Result, error) {
-	result, err := db.Conn.ExecContext(
+func (db *DB) InsertSolanaNotification(ctx context.Context, n *SolanaNotification) error {
+
+	_, err := db.Conn.ExecContext(
 		ctx,
 		`
-insert into solana_events (signature, slot, stage, type, raw_input, program_data, payload, error)
-values ($1, $2, $3, $4, $5, $6, $7, $8)
+insert into solana_notifications (signature, slot, stage, logs, events)
+values ($1, $2, $3, $4, $5)
+returning id
         `,
-		e.Signature,
-		e.Slot,
-		e.Stage,
-		e.Type,
-		e.RawInput,
-		e.ProgramData,
-		e.Payload,
-		e.Error,
+		n.Params.Result.Value.Signature,
+		n.Params.Result.Context.Slot,
+		n.Stage,
+		pq.Array(n.Params.Result.Value.Logs),
+		n.Events,
 	)
 
-	return result, err
+	return err
 }
 
-func (db *DB) InsertStone(ctx context.Context, stone *Stone) error {
-	_, err := db.Conn.ExecContext(
+func (db *DB) InsertStoneTx(ctx context.Context, tx *sql.Tx, stone *Stone) error {
+	_, err := tx.ExecContext(
 		ctx,
 		`
 		insert into stones (
@@ -384,8 +475,20 @@ func (db *DB) InsertStone(ctx context.Context, stone *Stone) error {
 	return err
 }
 
-func (db *DB) InsertMonster(ctx context.Context, monster *Monster) error {
-	_, err := db.Conn.ExecContext(
+func (db *DB) UpdateStoneTx(ctx context.Context, tx *sql.Tx, stoneAddress string, sparkCount int) error {
+	_, err := tx.ExecContext(
+		ctx,
+		`
+		update stones set spark_count = $1 where mint_address = $2
+		`,
+		sparkCount,
+		stoneAddress,
+	)
+	return err
+}
+
+func (db *DB) InsertMonsterTx(ctx context.Context, tx *sql.Tx, monster *Monster) error {
+	_, err := tx.ExecContext(
 		ctx,
 		`
 insert into monsters (

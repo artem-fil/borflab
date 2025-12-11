@@ -38,7 +38,7 @@ func LogError(module, context string, err error) {
 	}
 
 	if len(callers) == 0 {
-		log.Printf("\033[31m[ERROR]\033[0m %s | %s: %v", module, context, err)
+		log.Printf("\033[31m[ERROR]\033[0m: %s | %s: %v", module, context, err)
 		return
 	}
 
@@ -49,7 +49,7 @@ func LogError(module, context string, err error) {
 	}
 
 	log.Printf(
-		"%s \033[31m[ERROR]\033[0m %-8s | %s: %v\n Call stack: %s",
+		"%s \033[31m[ERROR]\033[0m: %-8s | %s: %v\n Call stack: %s",
 		time.Now().Format("02-01-2006 15:04:05"),
 		module,
 		context,
@@ -60,7 +60,7 @@ func LogError(module, context string, err error) {
 
 func LogWarning(module, context string) {
 	log.Printf(
-		"%s \033[33m[WARN]\033[0m: %-8s | %s",
+		"%s \033[33m[WARN]\033[0m:  %-8s | %s",
 		time.Now().Format("02-01-2006 15:04:05"),
 		module,
 		context,
@@ -69,7 +69,7 @@ func LogWarning(module, context string) {
 
 func LogInfo(module, context string) {
 	log.Printf(
-		"%s [INFO]: %-8s | %s",
+		"%s [INFO]:  %-8s | %s",
 		time.Now().Format("02-01-2006 15:04:05"),
 		module,
 		context,

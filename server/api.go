@@ -96,6 +96,54 @@ func (a *api) GetStones(w *Responder, r *http.Request) {
 	w.Send(stones)
 }
 
+func (a *api) GetMonsters(w *Responder, r *http.Request) {
+
+	ctx := r.Context()
+	claims, _ := Claims(r)
+
+	query := r.URL.Query()
+
+	page := ParseInt(query.Get("page"), 1, 1, 1000)
+	limit := ParseInt(query.Get("limit"), 10, 1, 9)
+	allowedSorts := map[string]bool{
+		"created": true,
+		"rarity":  true,
+		"biome":   true,
+		"name":    true,
+	}
+	sort := query.Get("sort")
+	if !allowedSorts[sort] {
+		sort = "created"
+	}
+	order := query.Get("order")
+	if order != "asc" && order != "desc" {
+		order = "desc"
+	}
+
+	offset := (page - 1) * limit
+
+	monsters, total, err := a.db.SelectMonsters(ctx, claims.Id, limit, offset, sort, order)
+	if err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	pages := 0
+	if total > 0 {
+		pages = (total + limit - 1) / limit
+	}
+	response := struct {
+		Monsters []Monster
+		Total    int
+		Pages    int
+	}{
+		Monsters: monsters,
+		Total:    total,
+		Pages:    pages,
+	}
+	w.Send(response)
+}
+
 func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 
 	taskID := uuid.NewString()
@@ -611,8 +659,7 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 	uri := fmt.Sprintf("ipfs://%s", experiment.MetadataCID)
 	user_id := 12345
 	experiment_id := experiment.Id
-	fmt.Println(biome)
-	fmt.Println(rarity)
+
 	// === SOLANA logic ===
 
 	// 1. Prepare keys

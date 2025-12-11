@@ -3,15 +3,25 @@ import store from "./store.js";
 const isProd = !document.location.hostname.endsWith("localhost");
 const BASE_URL = isProd ? "https://borflab.com/api" : "http://127.0.0.1:8282";
 
-async function request(endpoint, { method = "GET", body, timeout = 10000, signal, headers = {} } = {}) {
+async function request(endpoint, { method = "GET", body, timeout = 10000, signal, headers = {}, params = {} } = {}) {
     const token = store.getToken();
 
     const controller = signal ? null : new AbortController();
     const id = controller ? setTimeout(() => controller.abort(), timeout) : null;
     const effectiveSignal = signal || controller?.signal;
 
+    const url = new URL(`${BASE_URL}${endpoint}`);
+
+    if (params) {
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== undefined && value !== null) {
+                url.searchParams.append(key, String(value));
+            }
+        });
+    }
+
     try {
-        const res = await fetch(`${BASE_URL}${endpoint}`, {
+        const res = await fetch(url.toString(), {
             method,
             headers: {
                 ...(body instanceof FormData ? {} : { "Content-Type": "application/json" }),
@@ -66,6 +76,17 @@ export default {
 
     async getStones() {
         return request("/stones");
+    },
+
+    async getMonsters({ page, limit, sort, order } = {}) {
+        return request("/monsters", {
+            params: {
+                page: page ?? 1,
+                limit: limit ?? 10,
+                sort: sort ?? "created",
+                order: order ?? "desc",
+            },
+        });
     },
 
     async analyze(formData, signal) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 
 	"image"
 	"image/jpeg"
@@ -119,4 +120,48 @@ func CheckBiome(maybeBiome string) (*Biome, error) {
 	default:
 		return nil, fmt.Errorf("invalid biome: '%s'", maybeBiome)
 	}
+}
+
+func ParseInt(value string, defaultValue, min, max int) int {
+	if value == "" {
+		return defaultValue
+	}
+
+	v, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+
+	return v
+}
+
+func ValidateSort(sortBy, defaultSort string) string {
+
+	allowedSorts := map[string]bool{
+		"created": true,
+		"rarity":  true,
+		"biome":   true,
+		"name":    true,
+	}
+
+	if _, ok := allowedSorts[sortBy]; ok {
+		return sortBy
+	}
+
+	return defaultSort
+}
+
+func ValidateOrder(order, defaultOrder string) string {
+	if order == "asc" || order == "desc" {
+		return order
+	}
+
+	return defaultOrder
 }

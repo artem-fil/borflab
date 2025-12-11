@@ -3,13 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -19,24 +20,23 @@ import (
 )
 
 type SolanaAgent struct {
-	cfg       SolanaConfig
-	db        *DB
-	ws        *websocket.Conn
-	rpcClient *rpc.Client
+	cfg SolanaConfig
+	db  *DB
+	ws  *websocket.Conn
 }
 
-type SolanaProcessStage string
+type SolanaNotificationStage string
 
 const (
-	SolanaStageTxError        SolanaProcessStage = "transaction_error"
-	SolanaStageDecodeError    SolanaProcessStage = "decode_error"
-	SolanaStageUnknownEvent   SolanaProcessStage = "unknown_event"
-	SolanaStageInvalidPayload SolanaProcessStage = "invalid_payload"
-	SolanaStageBusinessError  SolanaProcessStage = "business_error"
-	SolanaStageDone           SolanaProcessStage = "done"
+	SolanaStageTxError       SolanaNotificationStage = "transaction_error"
+	SolanaStageDecodeError   SolanaNotificationStage = "decode_error"
+	SolanaStageEventError    SolanaNotificationStage = "event_error"
+	SolanaStageBusinessError SolanaNotificationStage = "business_error"
+	SolanaStageDone          SolanaNotificationStage = "done"
+	SolanaStagePlaceholder   SolanaNotificationStage = "---"
 )
 
-type SolanaMessage struct {
+type SolanaNotification struct {
 	Jsonrpc string `json:"jsonrpc"`
 	Method  string `json:"method"`
 	Params  struct {
@@ -51,16 +51,33 @@ type SolanaMessage struct {
 			} `json:"value"`
 		} `json:"result"`
 	} `json:"params"`
+	Stage   SolanaNotificationStage
+	Created time.Time
+	Events  json.RawMessage
 }
 
-type AnchorError struct {
-	InstructionIndex int    `json:"InstructionIndex"`
-	Custom           uint32 `json:"Custom"`
+type SolanaEvent struct {
+	ProgramData []byte
+	Type        *string
+	Payload     *json.RawMessage
+	Error       *string
+	Created     time.Time
 }
 
 var eventDiscriminators = map[[8]byte]string{
 	{246, 253, 98, 133, 133, 132, 214, 224}: "CardInstanceMinted",
 	{235, 37, 241, 232, 236, 3, 253, 195}:   "StoneInstanceMinted",
+	{132, 192, 109, 134, 147, 251, 93, 42}:  "SparkUsed",
+}
+
+var ixDiscriminators = map[string][]byte{
+	"StoneInstanceMinted": {3, 147, 97, 164, 139, 153, 105, 248},
+	"CardInstanceMinted":  {4, 182, 83, 217, 232, 35, 33, 64},
+}
+
+type SparkUsedPayload struct {
+	Mint            string
+	SparksRemaining uint16
 }
 
 type CardInstancePayload struct {
@@ -87,27 +104,28 @@ type StoneInstancePayload struct {
 	UserId       int32
 }
 
-type SolanaEvent struct {
-	Signature   string
-	Slot        int64
-	Stage       SolanaProcessStage
-	Error       *string
-	Type        *string
-	RawInput    *json.RawMessage
-	ProgramData []byte
-	Payload     *json.RawMessage
-	Created     time.Time
-}
-
 func NewSolanaAgent(cfg SolanaConfig, db *DB) *SolanaAgent {
-	rpcClient := rpc.New(rpc.DevNet.RPC)
 	sa := &SolanaAgent{
-		cfg:       cfg,
-		db:        db,
-		rpcClient: rpcClient,
+		cfg: cfg,
+		db:  db,
 	}
 	go sa.Start()
 	return sa
+}
+
+func (sa *SolanaAgent) Start() {
+	backoff := 1 * time.Second
+	for {
+		if err := sa.connectAndListen(); err != nil {
+			LogError("Solana", "connection error", err)
+			time.Sleep(backoff)
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
+		} else {
+			backoff = 1 * time.Second
+		}
+	}
 }
 
 func (sa *SolanaAgent) connectAndListen() error {
@@ -151,375 +169,419 @@ func (sa *SolanaAgent) connectAndListen() error {
 	}()
 
 	for {
-		_, message, err := sa.ws.ReadMessage()
+		_, notification, err := sa.ws.ReadMessage()
 		if err != nil {
 			return err
 		}
 
-		sa.processLogMessage(message)
+		sa.processNotification(notification)
 	}
 }
 
-func (sa *SolanaAgent) processLogMessage(input []byte) {
-	var msg SolanaMessage
-	if err := json.Unmarshal(input, &msg); err != nil {
-		LogError("Solana", "failed to parse log message", err)
+func (sa *SolanaAgent) processNotification(input []byte) {
+	var notification SolanaNotification
+	if err := json.Unmarshal(input, &notification); err != nil {
+		LogError("Solana", "failed to parse notification", err)
 		return
 	}
 
-	if msg.Method != "logsNotification" {
+	if notification.Method != "logsNotification" {
 		return
 	}
 
-	signature := msg.Params.Result.Value.Signature
-	slot := msg.Params.Result.Context.Slot
-	logs := msg.Params.Result.Value.Logs
-	txError := msg.Params.Result.Value.Err
-
-	event := SolanaEvent{
-		Signature: signature,
-		Slot:      slot,
-	}
-
+	txError := notification.Params.Result.Value.Err
 	if txError != nil {
-		event.Stage = SolanaStageTxError
-		errStr := string(*txError)
-		event.Error = &errStr
-	} else {
-		programDataBlocks, err := sa.extractProgramData(logs)
-		if err != nil {
-			event.Stage = SolanaStageDecodeError
-			errStr := err.Error()
-			event.Error = &errStr
-		} else {
-			for _, pd := range programDataBlocks {
-				if len(pd) >= 8 {
-					var discriminator [8]byte
-					copy(discriminator[:], pd[:8])
+		notification.Stage = SolanaStageTxError
+	}
+	ctx := context.Background()
 
-					eventType, ok := eventDiscriminators[discriminator]
-					if ok {
-						event.Type = &eventType
-						payload, err := sa.extractEventPayload(eventType, pd[8:])
-						if err != nil {
-							event.Stage = SolanaStageInvalidPayload
-							errStr := err.Error()
-							event.Error = &errStr
-						} else {
-							event.Payload = payload
-							if err := sa.handleEvent(event); err != nil {
-								event.Stage = SolanaStageBusinessError
-								errStr := err.Error()
-								event.Error = &errStr
-							} else {
-								event.Stage = SolanaStageDone
-							}
-						}
-					}
-				}
-			}
+	programId, err := solana.PublicKeyFromBase58(sa.cfg.ProgramId)
+	if err != nil {
+		notification.Stage = SolanaStagePlaceholder
+	}
+	srm := NewSolanaRpcManager(programId)
+
+	events, dbMutator, err := srm.ProcessLogs(ctx, notification)
+
+	if err != nil || len(events) == 0 {
+		notification.Stage = SolanaStageDecodeError
+	}
+
+	eventsJSON, err := json.Marshal(events)
+	if err != nil {
+		notification.Stage = SolanaStageBusinessError
+	}
+
+	notification.Events = eventsJSON
+
+	if notification.Stage != SolanaStageBusinessError {
+		notification.Stage = SolanaStageDone
+	}
+
+	if dbMutator.HasMutations() {
+		if err := dbMutator.ApplyAll(ctx, sa.db); err != nil {
+			notification.Stage = SolanaStagePlaceholder
 		}
 	}
 
-	if event.Stage != SolanaStageDone {
-		raw := make([]byte, len(input))
-		copy(raw, input)
-		rawMessage := json.RawMessage(raw)
-		event.RawInput = &rawMessage
+	err = sa.db.InsertSolanaNotification(ctx, &notification)
+	if err != nil {
+		notification.Stage = SolanaStagePlaceholder
 	}
 
-	fmt.Printf("\n%+v\n", event)
-
-	if _, err := sa.db.InsertSolanaEvent(context.Background(), &event); err != nil {
-		LogError("Solana", "cannot insert event", err)
-	}
+	sa.Log(notification)
 }
 
-func (sa *SolanaAgent) extractProgramData(logs []string) ([][]byte, error) {
-	var programData [][]byte
-	for _, log := range logs {
-		if base64Data, ok := strings.CutPrefix(log, "Program data: "); ok {
-			decoded, err := base64.StdEncoding.DecodeString(base64Data)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode program data: %v", err)
-			}
-			programData = append(programData, decoded)
-		}
-	}
-	if len(programData) == 0 {
-		return programData, errors.New("missing program data")
-	}
-	return programData, nil
-}
+type SolanaEventExtractor struct{}
 
-func (sa *SolanaAgent) extractEventPayload(eventType string, data []byte) (*json.RawMessage, error) {
+func (see *SolanaEventExtractor) DecodeEvent(input []byte) ([]byte, string, error) {
+	var discriminator [8]byte
+	programData := input[8:]
+	copy(discriminator[:], input[:8])
 
-	var extractors = map[string]func([]byte) (any, error){
-		"StoneInstanceMinted": sa.extractStoneInstanceMinted,
-		"CardInstanceMinted":  sa.extractCardInstanceMinted,
-		// "SparkCardInstanceMinted": sa.handleSparkCardInstanceMinted,
-		// "CardSelected":        sa.handleCardSelected,
-		// "CardSwapped":         sa.handleCardSwapped,
-	}
-
-	handler, ok := extractors[eventType]
+	eventType, ok := eventDiscriminators[discriminator]
 	if !ok {
-		return nil, fmt.Errorf("cannot find extractor for event %s", eventType)
+		return programData, "", fmt.Errorf("unknown event discriminator %v ", discriminator)
 	}
-	payload, err := handler(data)
-	if err != nil || payload == nil {
-		return nil, fmt.Errorf("cannot extract payload for event %s: %v", eventType, err)
-	}
-
-	rawBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("cannot marshal payload for event %s: %v", eventType, err)
-	}
-
-	raw := json.RawMessage(rawBytes)
-	return &raw, nil
+	return programData, eventType, nil
 }
 
-func (sa *SolanaAgent) handleEvent(event SolanaEvent) error {
+func (see *SolanaEventExtractor) ExtractStonePayload(programData []byte) (*StoneInstancePayload, error) {
+	r := NewReader(programData)
+	mintBytes := r.ReadBytes(32)
+	ownerBytes := r.ReadBytes(32)
+	stoneType := r.ReadString()
+	serialNumber := r.ReadUint32()
+	pricePaid := r.ReadUint64()
+	stateBytes := r.ReadBytes(32)
+	userId := r.ReadUint32()
+	r.EnsureEOF()
 
-	var eventHandlers = map[string]func(SolanaEvent) error{
-		"StoneInstanceMinted": sa.handleStoneInstanceMinted,
-		"CardInstanceMinted":  sa.handleCardInstanceMinted,
-		// "SparkCardInstanceMinted": sa.handleSparkCardInstanceMinted,
-		// "CardSelected":        sa.handleCardSelected,
-		// "CardSwapped":         sa.handleCardSwapped,
-	}
-
-	handler, ok := eventHandlers[*event.Type]
-	if !ok {
-		return fmt.Errorf("cannot find handler for event: %v", event.Type)
-	}
-	err := handler(event)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (sa *SolanaAgent) extractStoneInstanceMinted(data []byte) (any, error) {
-
-	offset := 0
-
-	mintBytes, err := sa.readBytes(data, &offset, 32)
-	if err != nil {
-		return nil, err
-	}
-
-	ownerBytes, err := sa.readBytes(data, &offset, 32)
-	if err != nil {
-		return nil, err
-	}
-
-	stoneTypeLen, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-	stoneTypeBytes, err := sa.readBytes(data, &offset, int(stoneTypeLen))
-	if err != nil {
-		return nil, err
-	}
-
-	serialNumber, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-
-	pricePaid, err := sa.readUint64(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-	stateBytes, err := sa.readBytes(data, &offset, 32)
-	if err != nil {
-		return nil, err
-	}
-
-	userId, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-
-	if offset != len(data) {
-		return nil, fmt.Errorf("parsed %d bytes but data length is %d", offset, len(data))
+	if r.err != nil {
+		return nil, r.err
 	}
 
 	payload := StoneInstancePayload{
 		Mint:         base64.StdEncoding.EncodeToString(mintBytes),
 		Owner:        base64.StdEncoding.EncodeToString(ownerBytes),
 		SerialNumber: serialNumber,
-		StoneType:    string(stoneTypeBytes),
+		StoneType:    stoneType,
 		StoneState:   base64.StdEncoding.EncodeToString(stateBytes),
 		PricePaid:    pricePaid,
 		UserId:       int32(userId),
 	}
-
-	return payload, nil
+	return &payload, nil
 }
 
-func (sa *SolanaAgent) extractCardInstanceMinted(data []byte) (any, error) {
-	offset := 0
+func (see *SolanaEventExtractor) ExtractCardPayload(programData []byte) (*CardInstancePayload, error) {
+	r := NewReader(programData)
 
-	mintBytes, err := sa.readBytes(data, &offset, 32)
-	if err != nil {
-		return nil, err
-	}
+	mintBytes := r.ReadBytes(32)
+	ownerBytes := r.ReadBytes(32)
+	stoneMintBytes := r.ReadBytes(32)
+	name := r.ReadString()
+	description := r.ReadString()
+	biome := r.ReadString()
+	rarity := r.ReadString()
+	serialNumber := r.ReadUint32()
+	cardStateBytes := r.ReadBytes(32)
+	userId := r.ReadUint32()
+	experimentId := r.ReadUint32()
+	r.EnsureEOF()
 
-	ownerBytes, err := sa.readBytes(data, &offset, 32)
-	if err != nil {
-		return nil, err
-	}
-
-	stoneMintBytes, err := sa.readBytes(data, &offset, 32)
-	if err != nil {
-		return nil, err
-	}
-
-	nameLen, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-	nameBytes, err := sa.readBytes(data, &offset, int(nameLen))
-	if err != nil {
-		return nil, err
-	}
-
-	descriptionLen, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-	descriptionBytes, err := sa.readBytes(data, &offset, int(descriptionLen))
-	if err != nil {
-		return nil, err
-	}
-
-	biomeLen, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-	biomeBytes, err := sa.readBytes(data, &offset, int(biomeLen))
-	if err != nil {
-		return nil, err
-	}
-
-	rarityLen, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-	rarityBytes, err := sa.readBytes(data, &offset, int(rarityLen))
-	if err != nil {
-		return nil, err
-	}
-
-	serialNumber, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-
-	cardStateBytes, err := sa.readBytes(data, &offset, 32)
-	if err != nil {
-		return nil, err
-	}
-
-	userId, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-
-	experimentId, err := sa.readUint32(data, &offset)
-	if err != nil {
-		return nil, err
-	}
-
-	if offset != len(data) {
-		return nil, fmt.Errorf("parsed %d bytes but data length is %d", offset, len(data))
+	if r.err != nil {
+		return nil, r.err
 	}
 
 	payload := CardInstancePayload{
 		Mint:         base64.StdEncoding.EncodeToString(mintBytes),
 		Owner:        base64.StdEncoding.EncodeToString(ownerBytes),
 		StoneMint:    base64.StdEncoding.EncodeToString(stoneMintBytes),
-		Name:         string(nameBytes),
-		Description:  string(descriptionBytes),
-		Biome:        string(biomeBytes),
-		Rarity:       string(rarityBytes),
+		Name:         name,
+		Description:  description,
+		Biome:        biome,
+		Rarity:       rarity,
 		SerialNumber: serialNumber,
 		CardState:    base64.StdEncoding.EncodeToString(cardStateBytes),
 		UserId:       int32(userId),
 		ExperimentId: int32(experimentId),
 	}
-
-	return payload, nil
+	return &payload, nil
 }
 
-func (sa *SolanaAgent) handleStoneInstanceMinted(event SolanaEvent) error {
+func (see *SolanaEventExtractor) ExtractSparkPayload(programData []byte) (*SparkUsedPayload, error) {
+	r := NewReader(programData)
 
-	ctx := context.Background()
-	programId, err := solana.PublicKeyFromBase58(sa.cfg.ProgramId)
+	mintBytes := r.ReadBytes(32)
+	sparksRemaining := r.ReadUint16()
+
+	r.EnsureEOF()
+
+	if r.err != nil {
+		return nil, r.err
+	}
+
+	payload := SparkUsedPayload{
+		Mint:            base64.StdEncoding.EncodeToString(mintBytes),
+		SparksRemaining: sparksRemaining,
+	}
+	return &payload, nil
+}
+
+type SolanaRpcManager struct {
+	rpcClient *rpc.Client
+	programId solana.PublicKey
+}
+
+func NewSolanaRpcManager(programId solana.PublicKey) *SolanaRpcManager {
+	rpcClient := rpc.New(rpc.DevNet.RPC)
+	rpc := &SolanaRpcManager{
+		rpcClient: rpcClient,
+		programId: programId,
+	}
+	return rpc
+}
+
+func (srm *SolanaRpcManager) getTransaction(ctx context.Context, signature string) (*solana.Transaction, *solana.UnixTimeSeconds, error) {
+
+	sig, err := solana.SignatureFromBase58(signature)
 	if err != nil {
-		return fmt.Errorf("cannot encode public key: %v", err)
+		return nil, nil, err
 	}
-
-	signature, err := solana.SignatureFromBase58(event.Signature)
+	rpcTx, err := srm.rpcClient.GetTransaction(ctx, sig, &rpc.GetTransactionOpts{
+		Encoding:   solana.EncodingBase64,
+		Commitment: rpc.CommitmentConfirmed,
+	})
 	if err != nil {
-		return fmt.Errorf("cannot decode tx signature: %v", err)
+		return nil, nil, err
 	}
-
-	tx, err := sa.rpcClient.GetTransaction(
-		ctx,
-		signature,
-		&rpc.GetTransactionOpts{
-			Encoding:   solana.EncodingBase64,
-			Commitment: rpc.CommitmentConfirmed,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("cannot fetch transaction: %v. tx: %s", err, signature)
+	if rpcTx.BlockTime == nil {
+		return nil, nil, err
 	}
-	if tx.BlockTime == nil {
-		return fmt.Errorf("cannot find block time. tx: %s", signature)
-	}
-
-	txBytes := tx.Transaction.GetBinary()
-
+	txBytes := rpcTx.Transaction.GetBinary()
 	txDecoded, err := solana.TransactionFromBytes(txBytes)
 	if err != nil {
-		return fmt.Errorf("cannot decode transaction: %v. %s", err, signature)
+		return nil, nil, err
+	}
+	return txDecoded, rpcTx.BlockTime, nil
+}
+
+func (srm *SolanaRpcManager) ProcessLogs(ctx context.Context, notification SolanaNotification) ([]SolanaEvent, *DBMutator, error) {
+	signature := notification.Params.Result.Value.Signature
+	slot := notification.Params.Result.Context.Slot
+	logs := notification.Params.Result.Value.Logs
+
+	var events []SolanaEvent
+	dbMutator := NewDBMutator()
+	txDecoded, blocktime, err := srm.getTransaction(ctx, signature)
+	if err != nil {
+		return events, dbMutator, err
 	}
 
-	var mintIx *solana.CompiledInstruction
-	for _, ix := range txDecoded.Message.Instructions {
-		programKey := txDecoded.Message.AccountKeys[ix.ProgramIDIndex]
+	for _, log := range logs {
+		if base64Data, ok := strings.CutPrefix(log, "Program data: "); ok {
+			decoded, err := base64.StdEncoding.DecodeString(base64Data)
+			if err != nil || len(decoded) < 8 {
+				notification.Stage = SolanaStagePlaceholder
+				break
+			}
 
-		if !programKey.Equals(programId) {
+			var maybeError error
+
+			extractor := SolanaEventExtractor{}
+
+			programData, eventType, err := extractor.DecodeEvent(decoded)
+			if err != nil {
+				notification.Stage = SolanaStagePlaceholder
+				break
+			}
+			event := SolanaEvent{
+				ProgramData: programData,
+				Type:        &eventType,
+			}
+
+			switch eventType {
+			case "CardInstanceMinted":
+				{
+					payload, err := extractor.ExtractCardPayload(programData)
+					if err != nil || payload == nil {
+						maybeError = fmt.Errorf("cannot extract payload for event %s: %v", eventType, err)
+						break
+					}
+
+					marshalled, err := json.Marshal(payload)
+					if err != nil {
+						maybeError = fmt.Errorf("cannot marshal payload for event %s: %v", eventType, err)
+						break
+					}
+					rawJson := json.RawMessage(marshalled)
+					event.Payload = &rawJson
+
+					discriminator, ok := ixDiscriminators[*event.Type]
+					if !ok {
+						maybeError = fmt.Errorf("cannot find ix discriminator for event %v", eventType)
+						break
+					}
+
+					cardMintIx, err := srm.findInstruction(txDecoded, discriminator, 13)
+					if err != nil {
+						maybeError = err
+						break
+					}
+					mintPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[0]]
+					ownerPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[1]]
+					stoneMintPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[5]]
+					cardStatePubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[9]]
+
+					metadataUri, err := srm.getCardMetadataUri(ctx, mintPubKey)
+					if err != nil || metadataUri == nil {
+						maybeError = err
+						break
+					}
+					metadataByte, err := srm.fetchIPFSMetadata(*metadataUri)
+					if err != nil {
+						maybeError = err
+						break
+					}
+					metadata, err := srm.parseCardMetadata(metadataByte)
+					if err != nil {
+						maybeError = err
+						break
+					}
+					monster := &Monster{
+						ExperimentId:     int(payload.ExperimentId),
+						Signature:        signature,
+						Slot:             slot,
+						MintAddress:      mintPubKey.String(),
+						OwnerAddress:     ownerPubKey.String(),
+						StoneMintAddress: stoneMintPubKey.String(),
+						CardStateAddress: cardStatePubKey.String(),
+						Name:             metadata["name"],
+						Species:          metadata["species"],
+						Lore:             metadata["lore"],
+						MovementClass:    metadata["movement_class"],
+						Behaviour:        metadata["behaviour"],
+						Personality:      metadata["personality"],
+						Abilities:        metadata["abilities"],
+						Habitat:          metadata["habitat"],
+						Biome:            Biome(metadata["biome"]),
+						Rarity:           Rarity(metadata["rarity"]),
+						SerialNumber:     int(payload.SerialNumber),
+						Generation:       1,
+						MetadataUri:      *metadataUri,
+						ImageCid:         metadata["image"],
+						Minted:           time.Unix(int64(*blocktime), 0).UTC(),
+					}
+					dbMutator.AddMutation(&InsertMonsterMutation{Monster: monster})
+				}
+			case "StoneInstanceMinted":
+				{
+					payload, err := extractor.ExtractStonePayload(programData)
+					if err != nil || payload == nil {
+						maybeError = fmt.Errorf("cannot extract payload for event %s: %v", eventType, err)
+						break
+					}
+
+					marshalled, err := json.Marshal(payload)
+					if err != nil {
+						maybeError = fmt.Errorf("cannot marshal payload for event %s: %v", eventType, err)
+						break
+					}
+					rawJson := json.RawMessage(marshalled)
+					event.Payload = &rawJson
+
+					discriminator, ok := ixDiscriminators[*event.Type]
+					if !ok {
+						maybeError = fmt.Errorf("cannot find ix discriminator for event %v", eventType)
+						break
+					}
+
+					stoneMintIx, err := srm.findInstruction(txDecoded, discriminator, 4)
+					if err != nil {
+						maybeError = err
+						break
+					}
+					mintPubKey := txDecoded.Message.AccountKeys[stoneMintIx.Accounts[0]]
+					ownerPubKey := txDecoded.Message.AccountKeys[stoneMintIx.Accounts[1]]
+					stoneStatePubKey := txDecoded.Message.AccountKeys[stoneMintIx.Accounts[3]]
+
+					sparksRemaining, err := srm.getStoneState(ctx, stoneStatePubKey)
+					if err != nil {
+						maybeError = err
+						break
+					}
+					stone := &Stone{
+						MintAddress:  mintPubKey.String(),
+						OwnerAddress: ownerPubKey.String(),
+						PdaAddress:   stoneStatePubKey.String(),
+						Signature:    signature,
+						Slot:         slot,
+						Minted:       time.Now().UTC(),
+						SparkCount:   int(sparksRemaining),
+						Type:         StoneType(payload.StoneType),
+					}
+					dbMutator.AddMutation(&InsertStoneMutation{Stone: stone})
+				}
+			case "SparkUsed":
+				{
+					payload, err := extractor.ExtractSparkPayload(programData)
+					if err != nil {
+						maybeError = fmt.Errorf("cannot extract payload for SparkUsed: %w", err)
+						break
+					}
+
+					marshalled, err := json.Marshal(payload)
+					if err != nil {
+						maybeError = fmt.Errorf("cannot marshal payload for event %s: %v", eventType, err)
+						break
+					}
+					rawJson := json.RawMessage(marshalled)
+					event.Payload = &rawJson
+
+					dbMutator.AddMutation(&UpdateStoneMutation{Mint: payload.Mint, SparksRemaining: int(payload.SparksRemaining)})
+				}
+			default:
+				{
+					maybeError = fmt.Errorf("unknown event type %v ", eventType)
+				}
+			}
+
+			if maybeError != nil {
+				notification.Stage = SolanaStageEventError
+				errText := maybeError.Error()
+				event.Error = &errText
+			}
+			events = append(events, event)
+		}
+	}
+	return events, dbMutator, nil
+}
+
+func (srm *SolanaRpcManager) findInstruction(tx *solana.Transaction, discriminator []byte, minAccounts int) (*solana.CompiledInstruction, error) {
+	var instruction *solana.CompiledInstruction
+	for _, ix := range tx.Message.Instructions {
+		programKey := tx.Message.AccountKeys[ix.ProgramIDIndex]
+		if !programKey.Equals(srm.programId) {
 			continue
 		}
 		if len(ix.Data) >= 8 {
-			discriminator := ix.Data[:8]
-
-			if bytes.Equal(discriminator, []byte{3, 147, 97, 164, 139, 153, 105, 248}) {
-				mintIx = &ix
+			if bytes.Equal(ix.Data[:8], discriminator) {
+				instruction = &ix
 				break
 			}
 		}
 	}
-
-	if mintIx == nil {
-		return fmt.Errorf("cannot find mint_stone_instance instruction. tx: %s", signature)
+	if instruction == nil {
+		return nil, fmt.Errorf("cannot find instruction for %v", discriminator)
 	}
-
-	if len(mintIx.Accounts) < 4 {
-		return fmt.Errorf("not enough accounts in instruction. tx: %s", signature)
+	if len(instruction.Accounts) < minAccounts {
+		return nil, fmt.Errorf("not enough accounts in instruction %v", discriminator)
 	}
+	return instruction, nil
+}
 
-	mintPubKey := txDecoded.Message.AccountKeys[mintIx.Accounts[0]]
-	ownerPubKey := txDecoded.Message.AccountKeys[mintIx.Accounts[1]]
-	stoneStatePubKey := txDecoded.Message.AccountKeys[mintIx.Accounts[3]]
-
-	stoneStateAccount, err := sa.rpcClient.GetAccountInfoWithOpts(
+func (srm *SolanaRpcManager) getStoneState(ctx context.Context, stoneStatePubKey solana.PublicKey) (int, error) {
+	stoneStateAccount, err := srm.rpcClient.GetAccountInfoWithOpts(
 		ctx,
 		stoneStatePubKey,
 		&rpc.GetAccountInfoOpts{
@@ -527,134 +589,32 @@ func (sa *SolanaAgent) handleStoneInstanceMinted(event SolanaEvent) error {
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("cannot get stone state account: %v", err)
+		return 0, fmt.Errorf("cannot get stone state account: %v", err)
 	}
-
 	if stoneStateAccount == nil || stoneStateAccount.Value == nil {
-		return fmt.Errorf("cannot validate stone state account: %v", err)
+		return 0, fmt.Errorf("cannot validate stone state account: %v", err)
 	}
 	stoneState := stoneStateAccount.Value.Data.GetBinary()
 	if len(stoneState) < 2 {
-		return fmt.Errorf("stone state data too short")
+		return 0, fmt.Errorf("stone state data too short")
 	}
-
 	sparksRemaining := binary.LittleEndian.Uint16(stoneState[40:42])
-
 	if sparksRemaining <= 0 {
-		return fmt.Errorf("selected stone has no sparks")
+		return 0, fmt.Errorf("selected stone has no sparks")
 	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(*event.Payload, &payload); err != nil {
-		return fmt.Errorf("cannot find stone type PDA: %v", err)
-	}
-
-	maybeStoneType := payload["StoneType"].(string)
-	stoneType, err := CheckStone(maybeStoneType)
-	if err != nil || stoneType == nil {
-		return fmt.Errorf("cannot cast stone type %s", maybeStoneType)
-	}
-
-	user, err := sa.db.SelectUserByWallet(ctx, ownerPubKey.String())
-	if err != nil {
-		return err
-	}
-
-	stone := &Stone{
-		UserId:       user.PrivyId,
-		MintAddress:  mintPubKey.String(),
-		OwnerAddress: ownerPubKey.String(),
-		PdaAddress:   stoneStatePubKey.String(),
-		Signature:    event.Signature,
-		Slot:         event.Slot,
-		Minted:       time.Now().UTC(),
-		SparkCount:   int(sparksRemaining),
-		Type:         *stoneType,
-	}
-
-	if err := sa.db.InsertStone(ctx, stone); err != nil {
-		LogError("Solana", "failed to insert stone", err)
-	}
-
-	return nil
+	return int(sparksRemaining), nil
 }
 
-func (sa *SolanaAgent) handleCardInstanceMinted(event SolanaEvent) error {
-	ctx := context.Background()
-	programId, err := solana.PublicKeyFromBase58(sa.cfg.ProgramId)
-	if err != nil {
-		return fmt.Errorf("cannot encode public key: %v", err)
-	}
-
-	signature, err := solana.SignatureFromBase58(event.Signature)
-	if err != nil {
-		return fmt.Errorf("cannot decode tx signature: %v", err)
-	}
-
-	tx, err := sa.rpcClient.GetTransaction(
-		ctx,
-		signature,
-		&rpc.GetTransactionOpts{
-			Encoding:   solana.EncodingBase64,
-			Commitment: rpc.CommitmentConfirmed,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("cannot fetch transaction: %v. tx: %s", err, signature)
-	}
-	if tx.BlockTime == nil {
-		return fmt.Errorf("cannot find block time. tx: %s", signature)
-	}
-
-	txBytes := tx.Transaction.GetBinary()
-	txDecoded, err := solana.TransactionFromBytes(txBytes)
-	if err != nil {
-		return fmt.Errorf("cannot decode transaction: %v. %s", err, signature)
-	}
-
-	var cardMintIx *solana.CompiledInstruction
-	for _, ix := range txDecoded.Message.Instructions {
-		programKey := txDecoded.Message.AccountKeys[ix.ProgramIDIndex]
-		if !programKey.Equals(programId) {
-			continue
-		}
-		if len(ix.Data) >= 8 {
-			discriminator := ix.Data[:8]
-			if bytes.Equal(discriminator, []byte{4, 182, 83, 217, 232, 35, 33, 64}) {
-				cardMintIx = &ix
-				break
-			}
-		}
-	}
-
-	if cardMintIx == nil {
-		return fmt.Errorf("cannot find mint_card_instance instruction. tx: %s", signature)
-	}
-
-	if len(cardMintIx.Accounts) < 13 {
-		return fmt.Errorf("not enough accounts in instruction. tx: %s", signature)
-	}
-
-	mintPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[0]]
-	ownerPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[1]]
-	stoneMintPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[5]]
-	cardStatePubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[9]]
+func (srm *SolanaRpcManager) getCardMetadataUri(ctx context.Context, mintPubKey solana.PublicKey) (*string, error) {
 
 	tokenMetadataProgramId := solana.MustPublicKeyFromBase58(TOKEN_METADATA_PROGRAM_ID)
-
-	metadataPDA, _, err := solana.FindProgramAddress(
-		[][]byte{
-			[]byte("metadata"),
-			tokenMetadataProgramId.Bytes(),
-			mintPubKey.Bytes(),
-		},
-		tokenMetadataProgramId,
-	)
+	metadataPDA, _, err := solana.FindProgramAddress([][]byte{
+		[]byte("metadata"), tokenMetadataProgramId.Bytes(), mintPubKey.Bytes(),
+	}, tokenMetadataProgramId)
 	if err != nil {
-		return fmt.Errorf("cannot find metadata address: %v", err)
+		return nil, fmt.Errorf("cannot find metadata address: %v", err)
 	}
-
-	metadataAccount, err := sa.rpcClient.GetAccountInfoWithOpts(
+	metadataAccount, err := srm.rpcClient.GetAccountInfoWithOpts(
 		ctx,
 		metadataPDA,
 		&rpc.GetAccountInfoOpts{
@@ -662,162 +622,39 @@ func (sa *SolanaAgent) handleCardInstanceMinted(event SolanaEvent) error {
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("cannot get metadata account: %v", err)
+		return nil, fmt.Errorf("cannot get metadata account: %v", err)
 	}
 	if metadataAccount == nil || metadataAccount.Value == nil {
-		return fmt.Errorf("cannot validate metadata account")
+		return nil, fmt.Errorf("cannot validate metadata account")
 	}
-
 	metadataBinary := metadataAccount.Value.Data.GetBinary()
 	if len(metadataBinary) < 200 {
-		return fmt.Errorf("metadata too short")
+		return nil, fmt.Errorf("metadata too short")
 	}
+	metadataOffset := 65
+	r := NewReader(metadataBinary[metadataOffset:])
 
-	offset := 65
-
-	nameLen, err := sa.readUint32(metadataBinary, &offset)
+	nameLen := r.ReadUint32()
+	_ = r.ReadBytes(int(nameLen))
+	symbolLen := r.ReadUint32()
+	_ = r.ReadBytes(int(symbolLen))
+	uriLen := r.ReadUint32()
+	uriBytes := r.ReadBytes(int(uriLen))
 	if err != nil {
-		return fmt.Errorf("failed to read name length: %v", err)
+		return nil, fmt.Errorf("failed to read uri data: %v", err)
 	}
-	offset += int(nameLen)
-
-	symbolLen, err := sa.readUint32(metadataBinary, &offset)
-	if err != nil {
-		return fmt.Errorf("failed to read symbol length: %v", err)
-	}
-	offset += int(symbolLen)
-
-	uriLen, err := sa.readUint32(metadataBinary, &offset)
-	if err != nil {
-		return fmt.Errorf("failed to read uri length: %v", err)
-	}
-
-	uriBytes, err := sa.readBytes(metadataBinary, &offset, int(uriLen))
-	if err != nil {
-		return fmt.Errorf("failed to read uri data: %v", err)
-	}
-
 	for i, b := range uriBytes {
 		if b == 0 {
 			uriBytes = uriBytes[:i]
 			break
 		}
 	}
-
 	uri := string(uriBytes)
 
-	metadataJSON, err := sa.fetchIPFSMetadata(uri)
-
-	if err != nil {
-		return fmt.Errorf("cannot fetch metadata: %v", err)
-
-	}
-
-	metadata, err := sa.parseNFTMetadata(metadataJSON)
-	if err != nil {
-		return fmt.Errorf("cannot parse metadata JSON: %v", err)
-
-	}
-
-	user, err := sa.db.SelectUserByWallet(ctx, ownerPubKey.String())
-	if err != nil {
-		return err
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(*event.Payload, &payload); err != nil {
-		return fmt.Errorf("cannot unmarshall event payload: %v", err)
-	}
-	fmt.Println("%+v", payload)
-	experimentId, ok := payload["ExperimentId"].(float64)
-	if !ok {
-		return fmt.Errorf("cannot convert experiment id")
-	}
-	serialNumber, ok := payload["SerialNumber"].(float64)
-	if !ok {
-		return fmt.Errorf("cannot convert serial number")
-	}
-
-	monster := &Monster{
-		UserId:           user.PrivyId,
-		ExperimentId:     int(experimentId),
-		Signature:        event.Signature,
-		Slot:             event.Slot,
-		MintAddress:      mintPubKey.String(),
-		OwnerAddress:     ownerPubKey.String(),
-		StoneMintAddress: stoneMintPubKey.String(),
-		CardStateAddress: cardStatePubKey.String(),
-
-		Name:          metadata["name"],
-		Species:       metadata["species"],
-		Lore:          metadata["lore"],
-		MovementClass: metadata["movement_class"],
-		Behaviour:     metadata["behaviour"],
-		Personality:   metadata["personality"],
-		Abilities:     metadata["abilities"],
-		Habitat:       metadata["habitat"],
-		Biome:         Biome(metadata["biome"]),
-		Rarity:        Rarity(metadata["rarity"]),
-		SerialNumber:  int(serialNumber),
-		Generation:    1,
-
-		MetadataUri: uri,
-		ImageCid:    metadata["image"],
-
-		Minted: time.Unix(int64(*tx.BlockTime), 0).UTC(),
-	}
-
-	if err := sa.db.InsertMonster(ctx, monster); err != nil {
-		LogError("Solana", "failed to insert monster", err)
-		return err
-	}
-
-	return nil
+	return &uri, nil
 }
 
-func (sa *SolanaAgent) Start() {
-	backoff := 1 * time.Second
-	for {
-		if err := sa.connectAndListen(); err != nil {
-			LogError("Solana", "connection error", err)
-			time.Sleep(backoff)
-			if backoff < 30*time.Second {
-				backoff *= 2
-			}
-		} else {
-			backoff = 1 * time.Second
-		}
-	}
-}
-
-func (sa *SolanaAgent) readUint32(data []byte, offset *int) (uint32, error) {
-	if *offset+4 > len(data) {
-		return 0, errors.New("not enough data for uint32")
-	}
-	val := binary.LittleEndian.Uint32(data[*offset : *offset+4])
-	*offset += 4
-	return val, nil
-}
-
-func (sa *SolanaAgent) readUint64(data []byte, offset *int) (uint64, error) {
-	if *offset+8 > len(data) {
-		return 0, errors.New("not enough data for uint64")
-	}
-	val := binary.LittleEndian.Uint64(data[*offset : *offset+8])
-	*offset += 8
-	return val, nil
-}
-
-func (sa *SolanaAgent) readBytes(data []byte, offset *int, length int) ([]byte, error) {
-	if *offset+length > len(data) {
-		return nil, fmt.Errorf("not enough data for %d bytes", length)
-	}
-	val := data[*offset : *offset+length]
-	*offset += length
-	return val, nil
-}
-
-func (sa *SolanaAgent) fetchIPFSMetadata(ipfsURI string) ([]byte, error) {
+func (srm *SolanaRpcManager) fetchIPFSMetadata(ipfsURI string) ([]byte, error) {
 	if !strings.HasPrefix(ipfsURI, "ipfs://") {
 		return nil, fmt.Errorf("not an IPFS URI: %s", ipfsURI)
 	}
@@ -875,7 +712,7 @@ func (sa *SolanaAgent) fetchIPFSMetadata(ipfsURI string) ([]byte, error) {
 	return nil, fmt.Errorf("failed to fetch from all gateways, last error: %v", lastErr)
 }
 
-func (sa *SolanaAgent) parseNFTMetadata(metadataJSON []byte) (map[string]string, error) {
+func (srm *SolanaRpcManager) parseCardMetadata(metadataJSON []byte) (map[string]string, error) {
 	var data map[string]any
 	if err := json.Unmarshal(metadataJSON, &data); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %v", err)
@@ -926,4 +763,162 @@ func (sa *SolanaAgent) parseNFTMetadata(metadataJSON []byte) (map[string]string,
 	}
 
 	return result, nil
+}
+
+type DBMutation interface {
+	Apply(ctx context.Context, tx *sql.Tx, db *DB) error
+}
+
+type DBMutator struct {
+	mutations []DBMutation
+}
+
+func NewDBMutator() *DBMutator {
+	return &DBMutator{
+		mutations: make([]DBMutation, 0),
+	}
+}
+
+func (m *DBMutator) AddMutation(cmd DBMutation) {
+	m.mutations = append(m.mutations, cmd)
+}
+
+func (m *DBMutator) HasMutations() bool {
+	return len(m.mutations) > 0
+}
+
+func (m *DBMutator) ApplyAll(ctx context.Context, db *DB) error {
+	if !m.HasMutations() {
+		return nil
+	}
+
+	tx, err := db.Conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+
+	defer func() {
+		if rbe := tx.Rollback(); rbe != nil && rbe != sql.ErrTxDone {
+			LogError("DBMutator", "Rollback error", rbe)
+		}
+	}()
+
+	for i, cmd := range m.mutations {
+		if err := cmd.Apply(ctx, tx, db); err != nil {
+			return fmt.Errorf("mutation #%d failed: %w", i, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+type InsertMonsterMutation struct {
+	Monster *Monster
+}
+
+func (m *InsertMonsterMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) error {
+	return db.InsertMonsterTx(ctx, tx, m.Monster)
+}
+
+type InsertStoneMutation struct {
+	Stone *Stone
+}
+
+func (m *InsertStoneMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) error {
+	return db.InsertStoneTx(ctx, tx, m.Stone)
+}
+
+type UpdateStoneMutation struct {
+	Mint            string
+	SparksRemaining int
+}
+
+func (m *UpdateStoneMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) error {
+	return db.UpdateStoneTx(ctx, tx, m.Mint, m.SparksRemaining)
+}
+
+type BinaryReader struct {
+	data   []byte
+	offset int
+	err    error
+}
+
+func NewReader(data []byte) *BinaryReader {
+	return &BinaryReader{data: data, offset: 0}
+}
+
+func (r *BinaryReader) ReadBytes(n int) []byte {
+	if r.err != nil {
+		return nil
+	}
+	if r.offset+n > len(r.data) {
+		r.err = fmt.Errorf("unexpected EOF reading %d bytes at offset %d", n, r.offset)
+		return nil
+	}
+	res := r.data[r.offset : r.offset+n]
+	r.offset += n
+	return res
+}
+
+func (r *BinaryReader) ReadUint16() uint16 {
+	b := r.ReadBytes(2)
+	if b == nil {
+		return 0
+	}
+	return binary.LittleEndian.Uint16(b)
+}
+
+func (r *BinaryReader) ReadUint32() uint32 {
+	b := r.ReadBytes(4)
+	if b == nil {
+		return 0
+	}
+	return binary.LittleEndian.Uint32(b)
+}
+
+func (r *BinaryReader) ReadUint64() uint64 {
+	b := r.ReadBytes(8)
+	if b == nil {
+		return 0
+	}
+	return binary.LittleEndian.Uint64(b)
+}
+
+func (r *BinaryReader) ReadString() string {
+	l := r.ReadUint32()
+	b := r.ReadBytes(int(l))
+	if b == nil {
+		return ""
+	}
+	return string(b)
+}
+
+func (r *BinaryReader) EnsureEOF() {
+	if r.err == nil && r.offset != len(r.data) {
+		r.err = fmt.Errorf("unread data remaining: %d bytes", len(r.data)-r.offset)
+	}
+}
+
+func (sa *SolanaAgent) Log(notification SolanaNotification) {
+	var eventTypes []string
+	var level string
+	if notification.Stage == SolanaStageDone {
+		level = "[INFO]: "
+	} else {
+		level = "\033[31m[ERROR]:\033[0m"
+	}
+	module := "Solana"
+	logLine := fmt.Sprintf(
+		"%s %s %-8s | %s | %s",
+		time.Now().Format("02-01-2006 15:04:05"),
+		level,
+		module,
+		strings.Join(eventTypes, ","),
+		notification.Stage,
+	)
+	if notification.Stage != SolanaStageDone {
+		logLine += fmt.Sprintf("\n Tx: %s, Slot: %v", notification.Params.Result.Value.Signature, notification.Params.Result.Context.Slot)
+	}
+
+	fmt.Fprintln(os.Stdout, logLine)
 }
