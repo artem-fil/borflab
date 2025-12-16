@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -36,20 +41,49 @@ func main() {
 	}
 	defer db.Close()
 
-	// setup telegram
 	telegram := NewTelegram(cfg.Telegram, cfg.Environment)
-
 	mddlwr := NewMiddleware(cfg.Privy)
+	rpcClient := rpc.New(rpc.DevNet.RPC)
 
-	solanaAgent := NewSolanaAgent(cfg.Solana, db)
+	// SSE agent
+	sseAgent := NewSSEAgent()
 
-	api := NewApi(cfg, db, telegram, solanaAgent)
+	// Solana agent
+	solanaAgent := NewSolanaAgent(cfg.Solana, db, rpcClient, sseAgent)
+	solanaAgentCtx, solanaAgentCancel := context.WithCancel(context.Background())
+	go solanaAgent.Start(solanaAgentCtx)
 
+	api := NewApi(cfg, db, telegram, rpcClient, sseAgent)
 	mux := NewRouter(mddlwr, api)
 
-	server := mddlwr.Wrap(mux)
+	server := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: mddlwr.Wrap(mux),
+	}
+
+	go func() {
+		err := server.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			LogError("Main", "ListenAndServe", err)
+		}
+	}()
 
 	LogInfo("Main", fmt.Sprintf("🚀 Server started on %s", cfg.Port))
-	LogError("Main", "ListenAndServe", http.ListenAndServe(":"+cfg.Port, server))
 
+	// graceful shutdown
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+
+	LogInfo("Main", "Shutting down gracefully...")
+
+	solanaAgentCancel()
+
+	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelShutdown()
+	if err := server.Shutdown(ctxShutdown); err != nil {
+		LogError("Main", "Server shutdown error", err)
+	}
+
+	LogInfo("Main", "Shutdown complete")
 }

@@ -102,10 +102,73 @@ export default {
         return request(`/progress/${taskId}`);
     },
 
-    async prepareMint(id, body) {
-        return request(`/prepare/${id}`, {
+    async prepareMonsterMint(id, body) {
+        return request(`/prepare-monster-mint/${id}`, {
             method: "POST",
             body,
         });
+    },
+
+    async prepareStoneMint(body) {
+        return request(`/prepare-stone-mint`, {
+            method: "POST",
+            body,
+        });
+    },
+
+    checkMonsterMint(txid, { onMessage, onError } = {}) {
+        const url = new URL(`${BASE_URL}/check-mint/${txid}`);
+
+        const es = new EventSource(url.toString());
+
+        es.onmessage = (event) => {
+            try {
+                console.log(event);
+                console.log(event.data);
+                const data = JSON.parse(event.data);
+                onMessage(data);
+            } catch (e) {
+                console.error("SSE parse error", e);
+            }
+        };
+
+        es.onerror = (err) => {
+            console.error("SSE error", err);
+            onError?.(err);
+        };
+
+        return {
+            close: () => {
+                es.close();
+            },
+        };
+    },
+
+    checkStoneMint(txid, { onMessage, onError } = {}) {
+        const url = new URL(`${BASE_URL}/check-mint/${txid}`);
+
+        const es = new EventSource(url.toString());
+
+        es.onmessage = (event) => {
+            try {
+                console.log(event);
+                console.log(event.data);
+                const data = JSON.parse(event.data);
+                onMessage(data);
+            } catch (e) {
+                console.error("SSE parse error", e);
+            }
+        };
+
+        es.onerror = (err) => {
+            console.error("SSE error", err);
+            onError?.(err);
+        };
+
+        return {
+            close: () => {
+                es.close();
+            },
+        };
     },
 };

@@ -9,7 +9,7 @@ create type rarity AS enum (
 create type biome AS enum (
   'amazonia',
   'aquatica',
-  'plushlandia',
+  'plushland',
   'canopica'
 );
 
@@ -73,7 +73,7 @@ create table if not exists stones (
     mint_address varchar(44) unique not null,
     owner_address varchar(44) not null,
     spark_count smallint not null check (spark_count >= 0),
-    stone stone not null,
+    type stone not null,
     pda_address varchar(44) unique not null,
     signature varchar(88) unique not null,
     slot bigint not null,

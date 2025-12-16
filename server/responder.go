@@ -33,6 +33,12 @@ func (rw *Responder) JSON(v any, status int) {
 	}
 }
 
+func (rw *Responder) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func (rw *Responder) Send(data any) {
 	rw.JSON(data, http.StatusOK)
 }

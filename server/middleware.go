@@ -22,8 +22,6 @@ func NewMiddleware(cfg PrivyConfig) *Middleware {
 	return &Middleware{cfg: cfg}
 }
 
-var requestIdCounter uint64
-
 type PrivyClaims struct {
 	Id             string `json:"sub,omitempty"`
 	AppId          string `json:"aud,omitempty"`

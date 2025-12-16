@@ -42,26 +42,7 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
     async function loadStonesData() {
         setLoading(true);
         try {
-            const stones = [];
-            const s = await api.getStones();
-
-            for (let stone of s) {
-                if (!stones[stone.Type]) {
-                    stones[stone.Type] = {
-                        Type: stone.Type,
-                        Image: STONES[stone.Type],
-                        Address: stone.MintAddress,
-                        TotalSparks: 0,
-                        SparkCount: Infinity,
-                    };
-                }
-                stones[stone.Type].TotalSparks += stone.SparkCount;
-
-                if (stone.SparkCount < stones[stone.Type].SparkCount) {
-                    stones[stone.Type].Address = stone.MintAddress;
-                    stones[stone.Type].SparkCount = stone.SparkCount;
-                }
-            }
+            const stones = await api.getStones();
 
             setAvailableStones(stones);
         } catch (error) {
@@ -72,29 +53,16 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
         }
     }
 
-    const handleStoneSelect = async (stoneType) => {
-        const stoneData = availableStones[stoneType];
-        if (stoneData && stoneData.SparkCount > 0) {
-            setStone(stoneData);
+    const handleStoneSelect = async (stone) => {
+        if (stone.SparkCount > 0) {
+            setStone(stone);
             setShowStoneDialog(false);
         }
-        await appendTypedLine(`${stoneType} selected.`);
+        await appendTypedLine(`${stone.Type} selected.`);
         if (preview) {
             await appendTypedLine("Ready for analysis.");
             await appendTypedLine("Status: waiting for approval…");
         }
-    };
-
-    const getStoneSparksInfo = (stoneType) => {
-        if (loading) return { display: "...", hasSparks: false };
-
-        const stoneData = availableStones[stoneType];
-        const hasSparks = !!stoneData && stoneData.SparkCount > 0;
-
-        return {
-            display: hasSparks ? stoneData.SparkCount.toString().padStart(2, "0") : "00",
-            hasSparks,
-        };
     };
 
     const MAX_FILE_SIZE_MB = 10;
@@ -181,7 +149,7 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                     style={{ top: "13%", left: "13%", width: "25%" }}
                     onClick={() => setShowStoneDialog(true)}
                 >
-                    {stone && <img src={stone.Image} alt={stone.Address} className="h-1/2 object-cover" />}
+                    {stone && <img src={STONES[stone.Type].thumb} alt={stone.Type} className="h-1/2 object-cover" />}
                 </div>
                 {/* submit */}
                 <button
@@ -224,14 +192,16 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                     <div className="bg-gray-900 border border-lime-500 rounded-lg p-6 max-w-md w-full">
                         <h3 className="text-lime-500 text-lg font-bold mb-4 text-center">SELECT STONE</h3>
                         <div className="grid grid-cols-3 gap-4">
-                            {Object.entries(STONES).map(([id, image]) => {
-                                const sparksInfo = getStoneSparksInfo(id);
-                                const isDisabled = !sparksInfo.hasSparks;
+                            {availableStones.map(({ Type, MintAddress, SparkCount }) => {
+                                const isDisabled = SparkCount <= 0;
+                                const formatted = SparkCount > 0 ? SparkCount.toString().padStart(2, "0") : "00";
 
                                 return (
                                     <button
-                                        key={id}
-                                        onClick={() => !isDisabled && handleStoneSelect(id)}
+                                        key={Type}
+                                        onClick={() =>
+                                            !isDisabled && handleStoneSelect({ Type, MintAddress, SparkCount })
+                                        }
                                         disabled={isDisabled}
                                         className={`flex flex-col items-center rounded-lg transition-colors ${
                                             isDisabled
@@ -244,13 +214,13 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                                                 isDisabled ? "bg-gray-800" : "bg-gray-700"
                                             }`}
                                         >
-                                            <img src={image} alt={id} />
+                                            <img src={STONES[Type].thumb} alt={Type} />
                                         </div>
                                         <span className={`text-xs ${isDisabled ? "text-gray-500" : "text-white"}`}>
-                                            {id}
+                                            {Type}
                                         </span>
                                         <span className={`text-xs ${isDisabled ? "text-gray-500" : "text-white"}`}>
-                                            {sparksInfo.display}
+                                            {formatted}
                                         </span>
                                     </button>
                                 );

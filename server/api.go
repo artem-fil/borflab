@@ -44,19 +44,24 @@ type TaskStatus struct {
 }
 
 type api struct {
-	cfg         *Config
-	db          *DB
-	telegram    *Telegram
-	solanaAgent *SolanaAgent
+	cfg       *Config
+	db        *DB
+	telegram  *Telegram
+	rpcClient *rpc.Client
+	sseAgent  *SSEAgent
 }
 
-type mintForm struct {
+type mintMonsterForm struct {
 	UserPubKey  string `json:"userPubKey"`
 	StonePubKey string `json:"stonePubKey"`
 }
 
-func NewApi(cfg *Config, db *DB, telegram *Telegram, solanaAgent *SolanaAgent) *api {
-	return &api{cfg, db, telegram, solanaAgent}
+type mintStoneForm struct {
+	UserPubKey string `json:"userPubKey"`
+}
+
+func NewApi(cfg *Config, db *DB, telegram *Telegram, rpcClient *rpc.Client, sseAgent *SSEAgent) *api {
+	return &api{cfg, db, telegram, rpcClient, sseAgent}
 }
 
 func (a *api) SyncUser(w *Responder, r *http.Request) {
@@ -88,7 +93,7 @@ func (a *api) GetStones(w *Responder, r *http.Request) {
 	ctx := r.Context()
 	claims, _ := Claims(r)
 
-	stones, err := a.db.SelectStones(ctx, claims.Id)
+	stones, err := a.db.SelectStoneStats(ctx, claims.Id)
 	if err != nil {
 		a.DbError(w, err)
 		return
@@ -266,6 +271,9 @@ func (a *api) processImage(taskID string, imgBytes []byte, experiment *Experimen
 		task.Progress = 100
 	}
 
+	prompt := fmt.Sprintf(Prompts.PromptAnalyze[experiment.Biome], Prompts.PromptStone[experiment.Stone])
+	fmt.Println(prompt)
+
 	requestBody := map[string]any{
 		"model": "gpt-4o",
 		"messages": []map[string]any{
@@ -274,7 +282,7 @@ func (a *api) processImage(taskID string, imgBytes []byte, experiment *Experimen
 				"content": []any{
 					map[string]any{
 						"type": "text",
-						"text": Prompts[AnalyzeSpecimen],
+						"text": prompt,
 					},
 				},
 			},
@@ -404,9 +412,9 @@ func (a *api) generateImage(taskID string, specimen map[string]any, experiment E
 		}
 	}
 
-	prompt, promptOk := specimen["RENDER_DIRECTIVE"]
+	renderDirective, renderDirectiveOk := specimen["RENDER_DIRECTIVE"]
 	profile, profileOk := specimen["MONSTER_PROFILE"].(map[string]any)
-	if !promptOk || !profileOk {
+	if !renderDirectiveOk || !profileOk {
 		fail("cannot parse speciment", fmt.Errorf("donno"))
 		return
 	}
@@ -444,6 +452,9 @@ func (a *api) generateImage(taskID string, specimen map[string]any, experiment E
 	abilities := getProfileField(profile, "abilities")
 	habitat := getProfileField(profile, "habitat")
 	// description := getProfileField(profile, "description")
+
+	prompt := fmt.Sprintf("%s. %s", renderDirective, Prompts.PromptGeneration[experiment.Biome])
+	fmt.Println(prompt)
 
 	requestBody := map[string]any{
 		"model":      "gpt-image-1",
@@ -623,9 +634,9 @@ func (a *api) Progress(w *Responder, r *http.Request) {
 	}
 }
 
-func (a *api) PrepareMint(w *Responder, r *http.Request) {
+func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 
-	form := &mintForm{}
+	form := &mintMonsterForm{}
 	if err := ParseBody(r, &form); err != nil {
 		a.BadRequestError(w, err)
 		return
@@ -671,7 +682,7 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 	}
 	userPubKey, err := solana.PublicKeyFromBase58(form.UserPubKey)
 	if err != nil {
-		fmt.Printf("invalid wallet public key: %v", err)
+		a.InternalError(w, fmt.Errorf("invalid wallet public key: %v", err))
 		return
 	}
 	cardCollectionPubKey, err := solana.PublicKeyFromBase58(a.cfg.Solana.CardCollectionPubKey)
@@ -747,7 +758,7 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 	}
 
 	// 3. Admin verification
-	adminAccount, err := a.solanaAgent.rpcClient.GetAccountInfoWithOpts(
+	adminAccount, err := a.rpcClient.GetAccountInfoWithOpts(
 		ctx,
 		cardMintAdminPda,
 		&rpc.GetAccountInfoOpts{
@@ -765,10 +776,6 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 	}
 
 	registeredAdmin := solana.PublicKeyFromBytes(adminAccount.GetBinary()[8:40])
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
-		return
-	}
 
 	if !registeredAdmin.Equals(adminPrivateKey.PublicKey()) {
 		a.InternalError(w, fmt.Errorf("unauthorized admin keypair"))
@@ -777,7 +784,7 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 
 	// 4. Stone state verification
 
-	stoneStateAccount, err := a.solanaAgent.rpcClient.GetAccountInfoWithOpts(
+	stoneStateAccount, err := a.rpcClient.GetAccountInfoWithOpts(
 		ctx,
 		stoneStatePda,
 		&rpc.GetAccountInfoOpts{
@@ -807,7 +814,7 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 
 	// 5. Card verification
 
-	cardTypeAccount, err := a.solanaAgent.rpcClient.GetAccountInfoWithOpts(
+	cardTypeAccount, err := a.rpcClient.GetAccountInfoWithOpts(
 		ctx,
 		cardTypePda,
 		&rpc.GetAccountInfoOpts{
@@ -917,7 +924,7 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 		return
 	}
 
-	mintRent, err := a.solanaAgent.rpcClient.GetMinimumBalanceForRentExemption(
+	mintRent, err := a.rpcClient.GetMinimumBalanceForRentExemption(
 		ctx,
 		82,
 		rpc.CommitmentConfirmed,
@@ -965,7 +972,7 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 
 	computeBudgetIx := computebudget.NewSetComputeUnitLimitInstruction(300000).Build()
 
-	recent, err := a.solanaAgent.rpcClient.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
+	recent, err := a.rpcClient.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
 	if err != nil {
 		a.InternalError(w, fmt.Errorf("cannot get latest blockhash: %v", err))
 		return
@@ -1022,6 +1029,310 @@ func (a *api) PrepareMint(w *Responder, r *http.Request) {
 
 }
 
+func (a *api) PrepareStoneMint(w *Responder, r *http.Request) {
+
+	form := &mintStoneForm{}
+	if err := ParseBody(r, &form); err != nil {
+		a.BadRequestError(w, err)
+		return
+	}
+	user_id := 12345
+	// === SOLANA logic ===
+
+	// 1. Prepare keys
+	ctx := context.Background()
+	programId, err := solana.PublicKeyFromBase58(a.cfg.Solana.ProgramId)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
+		return
+	}
+	userPubKey, err := solana.PublicKeyFromBase58(form.UserPubKey)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("invalid wallet public key: %v", err))
+		return
+	}
+	stoneCollectionPubKey, err := solana.PublicKeyFromBase58(a.cfg.Solana.StoneCollectionPubKey)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
+		return
+	}
+	tokenMetadataProgramId, err := solana.PublicKeyFromBase58(TOKEN_METADATA_PROGRAM_ID)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
+		return
+	}
+
+	// 2. Find PDAs
+
+	collectionAuthorityPda, _, err := solana.FindProgramAddress(
+		[][]byte{[]byte("collection_authority")},
+		programId,
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
+		return
+	}
+	treasury, _, err := solana.FindProgramAddress(
+		[][]byte{[]byte("treasury")},
+		programId,
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
+		return
+	}
+
+	// 6. Generate new mint
+	mint := solana.NewWallet()
+	mintPubKey := mint.PublicKey()
+
+	stoneStatePda, _, err := solana.FindProgramAddress(
+		[][]byte{[]byte("stone_state"), mintPubKey.Bytes()},
+		programId,
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
+		return
+	}
+
+	// 7. Find ATAs
+	ownerAta, _, err := solana.FindAssociatedTokenAddress(userPubKey, mintPubKey)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find owner ATA: %v", err))
+		return
+	}
+
+	// 8. Find metaplex PDAs
+	metadata, _, err := solana.FindProgramAddress(
+		[][]byte{
+			[]byte("metadata"),
+			tokenMetadataProgramId.Bytes(),
+			mintPubKey.Bytes(),
+		},
+		tokenMetadataProgramId,
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
+		return
+	}
+
+	masterEdition, _, err := solana.FindProgramAddress(
+		[][]byte{
+			[]byte("metadata"),
+			tokenMetadataProgramId.Bytes(),
+			mintPubKey.Bytes(),
+			[]byte("edition"),
+		},
+		tokenMetadataProgramId,
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
+		return
+	}
+
+	collectionMetadata, _, err := solana.FindProgramAddress(
+		[][]byte{
+			[]byte("metadata"),
+			tokenMetadataProgramId.Bytes(),
+			stoneCollectionPubKey.Bytes()},
+		tokenMetadataProgramId,
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
+		return
+	}
+
+	collectionMasterEdition, _, err := solana.FindProgramAddress(
+		[][]byte{
+			[]byte("metadata"),
+			tokenMetadataProgramId.Bytes(),
+			stoneCollectionPubKey.Bytes(),
+			[]byte("edition"),
+		},
+		tokenMetadataProgramId,
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
+		return
+	}
+
+	mintRent, err := a.rpcClient.GetMinimumBalanceForRentExemption(
+		ctx,
+		82,
+		rpc.CommitmentConfirmed,
+	)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot get mint rent: %v", err))
+		return
+	}
+
+	createMintAccountIx := system.NewCreateAccountInstruction(
+		mintRent,
+		82,
+		solana.TokenProgramID,
+		userPubKey,
+		mintPubKey,
+	).Build()
+
+	stoneTypes := []string{"Quartz", "Amazonite", "Ruby", "Agate", "Sapphire", "Topaz", "Jade"}
+
+	stoneTypePdas := []solana.PublicKey{}
+	for _, t := range stoneTypes {
+		pda, _, err := solana.FindProgramAddress(
+			[][]byte{
+				[]byte("stone_type"),
+				[]byte(t),
+			},
+			programId,
+		)
+		if err != nil {
+			a.InternalError(w, fmt.Errorf("cannot find PDA for stone type %s: %v", t, err))
+			return
+		}
+		stoneTypePdas = append(stoneTypePdas, pda)
+	}
+
+	accounts := []*solana.AccountMeta{
+		solana.NewAccountMeta(mintPubKey, true, false),
+		solana.NewAccountMeta(userPubKey, true, true),
+		solana.NewAccountMeta(ownerAta, true, false),
+		solana.NewAccountMeta(stoneStatePda, true, false),
+		solana.NewAccountMeta(stoneCollectionPubKey, false, false),
+		solana.NewAccountMeta(collectionMetadata, true, false),
+		solana.NewAccountMeta(collectionMasterEdition, true, false),
+		solana.NewAccountMeta(metadata, true, false),
+		solana.NewAccountMeta(masterEdition, true, false),
+		solana.NewAccountMeta(collectionAuthorityPda, true, false),
+		solana.NewAccountMeta(treasury, true, false),
+		solana.NewAccountMeta(solana.TokenProgramID, false, false),
+		solana.NewAccountMeta(solana.SPLAssociatedTokenAccountProgramID, false, false),
+		solana.NewAccountMeta(solana.SystemProgramID, false, false),
+		solana.NewAccountMeta(tokenMetadataProgramId, false, false),
+		solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),
+		solana.NewAccountMeta(solana.SysVarRecentBlockHashesPubkey, false, false),
+	}
+
+	for _, stonePda := range stoneTypePdas {
+		accounts = append(
+			accounts,
+			solana.NewAccountMeta(stonePda, true, false),
+		)
+	}
+
+	mintStoneIx := solana.NewInstruction(
+		programId,
+		accounts,
+		encodeMintStoneInstructionData(user_id),
+	)
+	/*
+		initMintIx := token.NewInitializeMintInstruction(
+			0,
+			collectionAuthorityPda,
+			solana.PublicKey{},
+			mintPubKey,
+			solana.SysVarRentPubkey,
+		).Build()
+	*/
+
+	computeBudgetIx := computebudget.NewSetComputeUnitLimitInstruction(300000).Build()
+
+	recent, err := a.rpcClient.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot get latest blockhash: %v", err))
+		return
+	}
+
+	instructions := []solana.Instruction{
+		computeBudgetIx,
+		createMintAccountIx,
+		//initMintIx,
+		mintStoneIx,
+	}
+
+	tx, err := solana.NewTransaction(
+		instructions,
+		recent.Value.Blockhash,
+		solana.TransactionPayer(userPubKey),
+	)
+
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot create transaction: %v", err))
+		return
+	}
+
+	_, err = tx.PartialSign(func(key solana.PublicKey) *solana.PrivateKey {
+		switch {
+		case key.Equals(mintPubKey):
+			privateKey := mint.PrivateKey
+			return &privateKey
+		default:
+			return nil
+		}
+	})
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot sign transaction: %v", err))
+		return
+	}
+
+	txBytes, err := tx.MarshalBinary()
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot marshal transaction: %v", err))
+		return
+	}
+
+	txBase64 := base64.StdEncoding.EncodeToString(txBytes)
+
+	response := struct {
+		TxBase64 string
+	}{
+		TxBase64: txBase64,
+	}
+
+	w.Send(response)
+
+}
+
+func (a *api) CheckMint(w http.ResponseWriter, r *http.Request) {
+
+	txid := Param(r)
+
+	if txid == "" {
+		http.Error(w, "txid required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	ch := make(chan SSEMessage, 10)
+	sub := &subscription{
+		txid: txid,
+		conn: ch,
+	}
+	a.sseAgent.AddSubscription(txid, sub)
+	defer a.sseAgent.RemoveSubscription(txid, sub)
+
+	notify := func(msg SSEMessage) {
+		fmt.Fprintf(w, "data: %s\n\n", msg.JSON())
+		flusher.Flush()
+		time.Sleep(20 * time.Millisecond)
+	}
+	for msg := range ch {
+		notify(msg)
+		if msg.Status == "confirmed" || msg.Status == "failed" {
+			time.Sleep(1000 * time.Millisecond)
+			return
+		}
+	}
+
+}
+
 func encodeMintCardInstructionData(name, description, biome, rarity, uri string, user_id, experiment_id int) []byte {
 	encodeAnchorString := func(s string) []byte {
 		buf := make([]byte, 4+len(s))
@@ -1047,6 +1358,22 @@ func encodeMintCardInstructionData(name, description, biome, rarity, uri string,
 	data = append(data, encodeAnchorString(uri)...)
 	data = append(data, encodeAnchorInt(user_id)...)
 	data = append(data, encodeAnchorInt(experiment_id)...)
+
+	return data
+}
+
+func encodeMintStoneInstructionData(user_id int) []byte {
+	encodeAnchorInt := func(i int) []byte {
+		buf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buf, uint32(i))
+		return buf
+	}
+
+	discriminator := []byte{3, 147, 97, 164, 139, 153, 105, 248}
+
+	data := make([]byte, 0)
+	data = append(data, discriminator...)
+	data = append(data, encodeAnchorInt(user_id)...)
 
 	return data
 }

@@ -115,10 +115,20 @@ func CheckStone(maybeStone string) (*StoneType, error) {
 func CheckBiome(maybeBiome string) (*Biome, error) {
 	biome := Biome(maybeBiome)
 	switch biome {
-	case BiomeAmazonia, BiomeAquatica, BiomePlushlandia, BiomeCanopica:
+	case BiomeAmazonia, BiomeAquatica, BiomePlushland, BiomeCanopica:
 		return &biome, nil
 	default:
 		return nil, fmt.Errorf("invalid biome: '%s'", maybeBiome)
+	}
+}
+
+func CheckRarity(maybeRarity string) (*Rarity, error) {
+	rarity := Rarity(maybeRarity)
+	switch rarity {
+	case RarityCommon, RarityEpic, RarityLegendary, RarityMythic, RarityRare:
+		return &rarity, nil
+	default:
+		return nil, fmt.Errorf("invalid rarity: '%s'", maybeRarity)
 	}
 }
 

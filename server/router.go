@@ -34,7 +34,11 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	router.Handle("POST", "/users/sync", mddlwr.RequireAuth(api.SyncUser))
 	router.Handle("POST", "/analyze", mddlwr.RequireAuth(api.AnalyzeSpecimen))
 	router.Handle("GET", "/progress/:id", mddlwr.RequireAuth(api.Progress))
-	router.Handle("POST", "/prepare/:id", mddlwr.RequireAuth(api.PrepareMint))
+	router.Handle("POST", "/prepare-monster-mint/:id", mddlwr.RequireAuth(api.PrepareMonsterMint))
+	router.Handle("POST", "/prepare-stone-mint", mddlwr.RequireAuth(api.PrepareStoneMint))
+
+	// SSE
+	router.Handle("GET", "/check-mint/:id", api.CheckMint)
 
 	return router
 }
@@ -77,8 +81,8 @@ func (r *Router) matchRoute(method, path string) (*Route, map[string]string) {
 		for i, routeSeg := range route.Segments {
 			pathSeg := pathSegments[i]
 
-			if strings.HasPrefix(routeSeg, ":") {
-				paramName := strings.TrimPrefix(routeSeg, ":")
+			if after, ok := strings.CutPrefix(routeSeg, ":"); ok {
+				paramName := after
 				params[paramName] = pathSeg
 			} else if routeSeg != pathSeg {
 				matches = false

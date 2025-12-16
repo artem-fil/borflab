@@ -1,15 +1,16 @@
-import { Connection, Transaction, PublicKey } from "@solana/web3.js";
+import { Connection, Transaction } from "@solana/web3.js";
 
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import posterImg from "../assets/poster.png";
 import printerImg from "../assets/printer.png";
 import cardbackImg from "../assets/card-back.png";
 import cardfrontImg from "../assets/card-front.png";
 import api from "../api";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 
-import { ENDPOINT } from "../config.js";
+import { ENDPOINT, STONES } from "../config.js";
 
 export default function Step4({ specimen, stone, biome, analyzeResult, nextTask }) {
     const { wallets } = useWallets();
@@ -17,11 +18,16 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
     const solanaWallet = wallets[0];
     const [done, setDone] = useState(false);
     const [minting, setIsMinting] = useState(false);
+    const [mintSuccess, setMintSuccess] = useState(false);
+    const [mintError, setMintError] = useState(false);
     const navigate = useNavigate();
     const frontCardRef = useRef(null);
     const backCardRef = useRef(null);
     const printerIndicatorRef = useRef(null);
     const outputImageRef = useRef(null);
+    const mintSSERef = useRef(null);
+    const mintTimeoutRef = useRef(null);
+    const mintFinishedRef = useRef(false);
 
     useEffect(() => {
         if (!nextTask) return;
@@ -29,9 +35,20 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
         pollGenerateProgress(nextTask);
     }, [nextTask]);
 
+    useEffect(() => {
+        return () => {
+            mintSSERef.current?.close();
+            mintSSERef.current = null;
+
+            clearTimeout(mintTimeoutRef.current);
+            mintTimeoutRef.current = null;
+        };
+    }, []);
+
     async function pollGenerateProgress(generateTaskId) {
         const BASE_DELAY = 1500;
         let pollingCancelled = false;
+
         const timeout = setTimeout(() => {
             pollingCancelled = true;
             alert("⚠️ Analysis timeout. The creature refused to draw.");
@@ -55,18 +72,15 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
 
                     if (frontCardRef.current) {
                         frontCardRef.current.style.bottom = `0`;
-                        frontCardRef.current.addEventListener("click", async () => {
+                        frontCardRef.current.onclick = async () => {
                             if (minting) {
                                 return;
                             }
                             try {
-                                setIsMinting(true);
-                                const { TxBase64 } = await api.prepareMint(experimentId, {
+                                const { TxBase64 } = await api.prepareMonsterMint(experimentId, {
                                     userPubKey: solanaWallet.address,
-                                    stonePubKey: stone.Address,
+                                    stonePubKey: stone.MintAddress,
                                 });
-
-                                console.log(TxBase64);
 
                                 function base64ToUint8Array(base64) {
                                     const raw = atob(base64);
@@ -97,24 +111,64 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
 
                                 const txid = await connection.sendRawTransaction(signedTransaction);
 
+                                setIsMinting(true);
+
+                                mintTimeoutRef.current && clearTimeout(mintTimeoutRef.current);
+
+                                mintTimeoutRef.current = setTimeout(() => {
+                                    console.warn("⏰ Mint SSE timeout");
+                                    mintSSERef.current?.close();
+                                    mintSSERef.current = null;
+                                    console.error("Mint is taking longer than usual. Check your library later ");
+                                }, 60000);
+
+                                mintSSERef.current?.close();
+                                mintSSERef.current = null;
+
+                                mintSSERef.current = api.checkMonsterMint(txid, {
+                                    onMessage: ({ Status, Data }) => {
+                                        if (Status === "confirmed") {
+                                            setMintSuccess(true);
+                                            mintFinishedRef.current = true;
+                                            clearTimeout(mintTimeoutRef.current);
+                                            mintTimeoutRef.current = null;
+                                            mintSSERef.current?.close();
+                                            mintSSERef.current = null;
+
+                                            console.log("🎉 Server confirmed mint!", Data);
+                                            console.log("🎉 Mint successful!");
+                                        }
+
+                                        if (Status === "failed") {
+                                            setMintError(true);
+                                            mintFinishedRef.current = true;
+                                            clearTimeout(mintTimeoutRef.current);
+                                            mintTimeoutRef.current = null;
+                                            mintSSERef.current?.close();
+                                            mintSSERef.current = null;
+                                            console.error("❌ Mint failed on server");
+                                        }
+                                    },
+                                    onError: () => {
+                                        console.warn("⚠️ SSE temporarily disconnected, retrying...");
+                                    },
+                                });
+
                                 const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(
                                     "confirmed"
                                 );
 
-                                const confirmation = await connection.confirmTransaction(
-                                    {
-                                        signature: txid,
-                                        blockhash,
-                                        lastValidBlockHeight,
-                                    },
-                                    "confirmed"
-                                );
+                                await connection
+                                    .confirmTransaction(
+                                        {
+                                            signature: txid,
+                                            blockhash,
+                                            lastValidBlockHeight,
+                                        },
+                                        "confirmed"
+                                    )
+                                    .catch(console.warn);
 
-                                if (confirmation.value.err) {
-                                    throw new Error(`Transaction failed: ${confirmation.value.err}`);
-                                }
-
-                                // === POST-MINT VERIFICATION ===
                                 console.log("✅ NFT minted successfully!");
                                 console.log("🎉 Result:");
                                 console.log(`Transaction: ${txid}`);
@@ -123,9 +177,10 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                                 console.error("❌ Transaction failed:");
                                 console.error(err);
                             } finally {
-                                setIsMinting(false);
+                                clearTimeout(mintTimeoutRef.current);
+                                mintTimeoutRef.current = null;
                             }
-                        });
+                        };
                     }
 
                     if (printerIndicatorRef.current) {
@@ -189,7 +244,11 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                                     </div>
                                     <div className="border-0 w-0.5 h-full bg-green-800" />
                                     <div className="py-1 w-4/12 flex flex-col gap-1">
-                                        <img src={stone?.Image} className=" object-cover" alt="borfstone" />
+                                        <img
+                                            src={STONES[stone?.Type]?.thumb}
+                                            className=" object-cover"
+                                            alt="borfstone"
+                                        />
                                         <strong className="mx-1 text-center uppercase py-1 bg-red-800 text-white">
                                             common
                                         </strong>
@@ -298,6 +357,39 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                 />
                 <img src={printerImg} alt="igniter" className="w-full h-auto object-contain" />
             </div>
+            {minting &&
+                createPortal(
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+                        {mintFinishedRef.current ? (
+                            <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
+                                {mintSuccess && (
+                                    <div className="flex flex-col items-center">
+                                        <span className="text-green-400 font-bold">🥳 Minted successfully!</span>
+                                        <Link to={`/library`}>Check monster 👉</Link>
+                                    </div>
+                                )}
+                                {mintError && <div className="text-red-400 font-bold">😖 Mint failed!</div>}
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
+                                <svg
+                                    className="animate-spin h-10 w-10 mb-4 text-white"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        className="opacity-75"
+                                        fill="currentColor"
+                                        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                                    />
+                                </svg>
+                                <span>Minting...</span>
+                            </div>
+                        )}
+                    </div>,
+                    document.body
+                )}
         </div>
     );
 }

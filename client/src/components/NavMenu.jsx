@@ -20,7 +20,7 @@ export default function BurgerMenu() {
                 }`}
                 style={{ transformOrigin: "top right" }}
             >
-                {["profile", "library", "lab", "shop", "counter", "privacy"].map((i) => {
+                {["profile", "library", "lab", "storage"].map((i) => {
                     return (
                         <Link key={i} to={`/${i}`} className="p-2 text-right" onClick={() => setOpen(false)}>
                             {i}

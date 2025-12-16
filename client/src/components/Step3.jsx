@@ -37,7 +37,7 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
             const formData = new FormData();
             formData.append("file", dataURLtoFile(specimen, "specimen.jpg"));
             formData.append("biome", biome);
-            formData.append("stone", stone.Address);
+            formData.append("stone", stone.MintAddress);
             const { Id } = await api.analyze(formData, abortControllerRef.current?.signal);
             pollAnalyzeProgress(Id);
         } catch (err) {

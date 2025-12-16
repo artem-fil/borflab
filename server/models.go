@@ -27,10 +27,10 @@ var stoneProbabilities = map[StoneType][5]int{
 type Biome string
 
 const (
-	BiomeAmazonia    Biome = "amazonia"
-	BiomeAquatica    Biome = "aquatica"
-	BiomePlushlandia Biome = "plushlandia"
-	BiomeCanopica    Biome = "canopica"
+	BiomeAmazonia  Biome = "amazonia"
+	BiomeAquatica  Biome = "aquatica"
+	BiomePlushland Biome = "plushland"
+	BiomeCanopica  Biome = "canopica"
 )
 
 type Rarity string
@@ -113,6 +113,12 @@ type Stone struct {
 	Slot         int64
 	Minted       time.Time
 	Created      time.Time
+}
+
+type StoneStats struct {
+	MintAddress *string
+	Type        StoneType
+	SparkCount  int
 }
 
 type Monster struct {

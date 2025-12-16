@@ -1,13 +1,20 @@
 import { useState, useEffect } from "react";
+import Card from "../components/Card";
+import Button from "../components/Button";
 
 import api from "../api";
+
+import { RARITIES } from "../config.js";
 
 const totalSlots = 9;
 
 export default function Library() {
+    const [openSort, setOpenSort] = useState(false);
     const [monsters, setMonsters] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [monsterDialog, setMonsterDialog] = useState(false);
+
     const [pagination, setPagination] = useState({
         page: 1,
         limit: totalSlots,
@@ -32,12 +39,11 @@ export default function Library() {
             });
 
             setMonsters(Monsters);
-            console.log(Monsters);
             if (Total) {
                 setPagination((prev) => ({
                     ...prev,
                     total: Total || 0,
-                    pages: Math.ceil((Pages || 0) / totalSlots),
+                    pages: Pages,
                 }));
             }
         } catch (err) {
@@ -53,6 +59,7 @@ export default function Library() {
     };
 
     const handleSortChange = (newSort) => {
+        console.log(newSort);
         if (newSort === pagination.sort) {
             setPagination((prev) => ({
                 ...prev,
@@ -71,7 +78,7 @@ export default function Library() {
 
     return (
         <div className="flex-grow flex flex-col items-center">
-            <div className="w-full flex justify-between px-6">
+            <div className="w-full flex justify-between px-6 py-2">
                 <div className="flex flex-col">
                     <h2 className="text-white font-bold text-xl">BORFcard Library</h2>
                     <span className="text-xs">
@@ -79,17 +86,24 @@ export default function Library() {
                     </span>
                 </div>
                 <div className="relative">
-                    <button className="h-full bg-red-500">sort</button>
+                    <Button onClick={() => setOpenSort(!openSort)} label={"sort"} />
                     <div
                         className={` absolute top-full right-0 flex flex-col items-end text-white bg-black/90 rounded-md uppercase transform transition-all duration-300 origin-top-right z-10 ${
-                            monsters ? "scale-y-100 opacity-100" : "scale-y-0 opacity-0"
+                            openSort ? "scale-y-100 opacity-100" : "scale-y-0 opacity-0"
                         }`}
                         style={{ transformOrigin: "top right" }}
                     >
-                        {["biome", "rarity", "created"].map((i) => {
+                        {["name", "biome", "rarity", "created"].map((field) => {
                             return (
-                                <div key={i} className="p-2" onClick={() => handleSortChange(i)}>
-                                    {i}
+                                <div
+                                    key={field}
+                                    className="p-2"
+                                    onClick={() => {
+                                        setOpenSort(!openSort);
+                                        handleSortChange(field);
+                                    }}
+                                >
+                                    {field}
                                 </div>
                             );
                         })}
@@ -98,37 +112,53 @@ export default function Library() {
             </div>
             <div className="w-full h-4 bg-gray-100 border-b-2 border-black shadow-md"></div>
             <div className="w-full flex-grow bg-stone-800 px-6 py-2">
-                <div className="grid grid-cols-3 gap-x-4 gap-y-2 w-full h-full">
-                    {monsters.map(({ ImageCid, SerialNumber }, i) => (
-                        <div key={i} className="flex flex-col gap-1 items-center">
-                            <div className="w-full aspect-[3/5] bg-gray-200 rounded-md overflow-hidden">
-                                <img
-                                    onClick={() => {}}
-                                    src={`https://ipfs.io/ipfs/${ImageCid}`}
-                                    alt={`specimen ${SerialNumber}`}
-                                    className="h-full object-cover"
-                                />
+                {monsterDialog ? (
+                    <div className="flex relative items-center justify-center w-full h-full">
+                        <button className="absolute top-0 right-0" onClick={() => setMonsterDialog(null)}>
+                            ❌
+                        </button>
+                        <Card monster={monsterDialog} />
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-3 gap-x-4 gap-y-2 w-full h-full">
+                        {monsters.map((monster, i) => (
+                            <div
+                                key={i}
+                                onClick={() => setMonsterDialog(monster)}
+                                className="flex flex-col gap-1 items-center uppercase text-xs"
+                            >
+                                <div className="w-full aspect-[3/4] bg-gray-200 rounded-md overflow-hidden">
+                                    <img
+                                        src={`https://ipfs.io/ipfs/${monster.ImageCid}`}
+                                        alt={`specimen ${monster.SerialNumber}`}
+                                        className="h-full object-cover"
+                                    />
+                                </div>
+                                <span className={`${RARITIES[monster.Rarity]}`}>{monster.Name}</span>
+                                <span className="text-white">{monster.Biome}</span>
                             </div>
-                            <span className="text-white uppercase text-xs">specimen 00{i + 1}</span>
-                        </div>
-                    ))}
-                </div>
+                        ))}
+                    </div>
+                )}
             </div>
             <div className="w-full h-4 bg-gray-100 shadow-md"></div>
-            <button onClick={() => handlePageChange(pagination.page - 1)} disabled={pagination.page <= 1 || loading}>
-                ←
-            </button>
-
-            <div className="page-info">
-                {pagination.page} of {pagination.pages || 1}
+            <div className="flex gap-2 py-2 text-lg">
+                <button
+                    onClick={() => handlePageChange(pagination.page - 1)}
+                    disabled={pagination.page <= 1 || loading}
+                >
+                    👈
+                </button>
+                <div>
+                    {pagination.page} of {pagination.pages || 1}
+                </div>
+                <button
+                    onClick={() => handlePageChange(pagination.page + 1)}
+                    disabled={pagination.page >= pagination.pages || loading}
+                >
+                    👉
+                </button>
             </div>
-
-            <button
-                onClick={() => handlePageChange(pagination.page + 1)}
-                disabled={pagination.page >= pagination.pages || loading}
-            >
-                →
-            </button>
         </div>
     );
 }

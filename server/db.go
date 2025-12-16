@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -91,7 +92,7 @@ func (db *DB) SelectStone(ctx context.Context, mintAddress string, userId string
 	err := db.Conn.QueryRowContext(
 		ctx,
 		`
-select id, user_id, mint_address, owner_address, spark_count, stone, pda_address, signature, slot, minted, created
+select id, user_id, mint_address, owner_address, spark_count, type, pda_address, signature, slot, minted, created
 from stones where mint_address = $1 and user_id = $2
 	`,
 		mintAddress,
@@ -116,13 +117,30 @@ from stones where mint_address = $1 and user_id = $2
 	return &stone, nil
 }
 
-func (db *DB) SelectStones(ctx context.Context, userId string) ([]Stone, error) {
+func (db *DB) SelectStoneStats(ctx context.Context, userId string) ([]StoneStats, error) {
 	rows, err := db.Conn.QueryContext(
 		ctx,
 		`
-select id, user_id, mint_address, owner_address, spark_count, stone, pda_address, signature, slot, minted, created
-from stones where user_id = $1
-	`,
+select
+    t.type,
+    coalesce(sum(s.spark_count) filter (where s.spark_count > 0), 0) as spark_count,
+    min_stone.mint_address
+from unnest(enum_range(null::stone)) as t(type)
+left join stones s
+    on s.user_id = $1
+   and s.type = t.type
+left join lateral (
+    select mint_address
+    from stones
+    where user_id = $1
+      and type = t.type
+      and spark_count > 0
+    order by spark_count
+    limit 1
+) min_stone on true
+group by
+    t.type,
+    min_stone.mint_address;`,
 		userId,
 	)
 
@@ -131,30 +149,22 @@ from stones where user_id = $1
 
 	}
 	defer rows.Close()
-	var stones []Stone
+	var stoneStats []StoneStats
 
 	for rows.Next() {
-		var stone Stone
+		var stoneStat StoneStats
 		err := rows.Scan(
-			&stone.Id,
-			&stone.UserId,
-			&stone.MintAddress,
-			&stone.OwnerAddress,
-			&stone.SparkCount,
-			&stone.Type,
-			&stone.PdaAddress,
-			&stone.Signature,
-			&stone.Slot,
-			&stone.Minted,
-			&stone.Created,
+			&stoneStat.Type,
+			&stoneStat.SparkCount,
+			&stoneStat.MintAddress,
 		)
 		if err != nil {
 			return nil, err
 		}
-		stones = append(stones, stone)
+		stoneStats = append(stoneStats, stoneStat)
 	}
 
-	return stones, nil
+	return stoneStats, nil
 }
 
 func (db *DB) SelectMonsters(ctx context.Context, userId string, limit int, offset int, sort string, order string) ([]Monster, int, error) {
@@ -175,7 +185,7 @@ func (db *DB) SelectMonsters(ctx context.Context, userId string, limit int, offs
 
 	rows, err := db.Conn.QueryContext(
 		ctx,
-		`
+		fmt.Sprintf(`
 select
 	id,
 	user_id,
@@ -202,8 +212,8 @@ select
 	slot,
 	minted,
 	created
-from monsters where user_id = $1 order by $2 limit $3 offset $4;`,
-		userId, sortOrder, limit, offset,
+from monsters where user_id = $1 order by %s limit $2 offset $3;`, sortOrder),
+		userId, limit, offset,
 	)
 	if err != nil {
 		return monsters, 0, err
@@ -436,7 +446,12 @@ select
 
 func (db *DB) InsertSolanaNotification(ctx context.Context, n *SolanaNotification) error {
 
-	_, err := db.Conn.ExecContext(
+	eventsJson, err := json.Marshal(n.Events)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Conn.ExecContext(
 		ctx,
 		`
 insert into solana_notifications (signature, slot, stage, logs, events)
@@ -447,22 +462,23 @@ returning id
 		n.Params.Result.Context.Slot,
 		n.Stage,
 		pq.Array(n.Params.Result.Value.Logs),
-		n.Events,
+		eventsJson,
 	)
 
 	return err
 }
 
 func (db *DB) InsertStoneTx(ctx context.Context, tx *sql.Tx, stone *Stone) error {
-	_, err := tx.ExecContext(
+	fmt.Printf("\n%+v\n", stone)
+	result, err := tx.ExecContext(
 		ctx,
 		`
 		insert into stones (
-			user_id, mint_address, owner_address, spark_count, stone, pda_address, signature, slot, minted
-		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			user_id, mint_address, owner_address, spark_count, type, pda_address, signature, slot, minted
+		) values ((select privy_id from users where wallet = $1), $2, $3, $4, $5, $6, $7, $8, $9)
 		on conflict (signature) do nothing
 		`,
-		stone.UserId,
+		stone.OwnerAddress,
 		stone.MintAddress,
 		stone.OwnerAddress,
 		stone.SparkCount,
@@ -472,11 +488,24 @@ func (db *DB) InsertStoneTx(ctx context.Context, tx *sql.Tx, stone *Stone) error
 		stone.Slot,
 		stone.Minted,
 	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows updated for address: %s", stone.MintAddress)
+	}
 	return err
 }
 
 func (db *DB) UpdateStoneTx(ctx context.Context, tx *sql.Tx, stoneAddress string, sparkCount int) error {
-	_, err := tx.ExecContext(
+
+	result, err := tx.ExecContext(
 		ctx,
 		`
 		update stones set spark_count = $1 where mint_address = $2
@@ -484,6 +513,17 @@ func (db *DB) UpdateStoneTx(ctx context.Context, tx *sql.Tx, stoneAddress string
 		sparkCount,
 		stoneAddress,
 	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows updated for address: %s", stoneAddress)
+	}
 	return err
 }
 
@@ -515,10 +555,10 @@ insert into monsters (
 	signature,
 	slot,
 	minted
-) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+) values ((select privy_id from users where wallet = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 on conflict (signature) do nothing
 		`,
-		monster.UserId,
+		monster.OwnerAddress,
 		monster.ExperimentId,
 		monster.MintAddress,
 		monster.OwnerAddress,
@@ -543,6 +583,21 @@ on conflict (signature) do nothing
 		monster.Minted,
 	)
 	return err
+}
+
+func (db *DB) SelectTxStatus(ctx context.Context, signature string) (bool, error) {
+	exists := false
+	err := db.Conn.QueryRowContext(
+		ctx,
+		`
+		select exists(select stage = 'done' from solana_notifications where signature = $1);
+		`,
+		signature,
+	).Scan(&exists)
+	if err != nil {
+		return exists, err
+	}
+	return exists, err
 }
 
 func nullable(s string) sql.NullString {
