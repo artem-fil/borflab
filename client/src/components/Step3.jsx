@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import posterImg from "../assets/poster.png";
-import analyzerImg from "../assets/analyzer.png";
+import posterImg from "@images/poster.png";
+import analyzerImg from "@images/analyzer.png";
+import labSound from "@sounds/lab.ogg";
 import api from "../api";
 
 export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, setNextTask }) {
@@ -8,20 +9,13 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
     const [progress, setProgress] = useState(0);
     const typingRef = useRef(false);
     const monitorRef = useRef(null);
-    const abortControllerRef = useRef(null);
-
-    useEffect(() => {
-        return () => {
-            abortControllerRef.current?.abort();
-        };
-    }, []);
+    const sseRef = useRef(null);
+    const queueRef = useRef(Promise.resolve());
+    const audioRef = useRef(new Audio(labSound));
+    audioRef.current.volume = 0.5;
 
     useEffect(() => {
         if (!specimen || !biome || !stone) return;
-
-        abortControllerRef.current?.abort();
-        abortControllerRef.current = new AbortController();
-
         startAnalyze();
     }, [specimen, biome, stone]);
 
@@ -33,88 +27,105 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
     }, [displayed]);
 
     async function startAnalyze() {
+        audioRef.current.play();
         try {
             const formData = new FormData();
-            formData.append("file", dataURLtoFile(specimen, "specimen.jpg"));
+            formData.append("file", specimen, "specimen.jpg");
             formData.append("biome", biome);
             formData.append("stone", stone.MintAddress);
-            const { Id } = await api.analyze(formData, abortControllerRef.current?.signal);
-            pollAnalyzeProgress(Id);
+
+            const { Id } = await api.analyze(formData);
+
+            subscribeAnalyzeProgress(Id);
         } catch (err) {
-            await appendTypedLine(`🔴 ${err.message || err}`);
+            await appendTypedLine(`❌ ${err.message || err}`);
             await appendTypedLine("Please, try again.");
         }
     }
 
-    async function pollAnalyzeProgress(analyzeTaskId) {
-        const BASE_DELAY = 1500;
+    function subscribeAnalyzeProgress(analyzeTaskId) {
+        const TIMEOUT_MS = 3 * 60 * 1000;
         let currentStep = 0;
-        let pollingCancelled = false;
-        const timeout = setTimeout(async () => {
-            pollingCancelled = true;
-            await appendTypedLine("⚠️ Analysis timeout: process terminated");
-        }, 5 * 60 * 1000);
+        let timeout = null;
 
-        async function poll() {
-            try {
-                const { progress, done, result, nextTask, error } = await api.progress(analyzeTaskId);
-                setProgress(progress);
-                const step = Math.floor(progress / 10);
-                if (step > currentStep) {
-                    for (; currentStep < step; currentStep++) {
-                        if (!error) {
+        const clearAll = () => {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+            if (timeout) {
+                clearTimeout(timeout);
+                timeout = null;
+            }
+            sseRef.current?.close();
+            sseRef.current = null;
+        };
+
+        timeout = setTimeout(async () => {
+            clearAll();
+            await appendTypedLine("⚠️ Analysis timeout: process terminated");
+        }, TIMEOUT_MS);
+
+        sseRef.current = api.subscribeSSE(analyzeTaskId, {
+            onEvent: async (event, data) => {
+                if (event === "progress") {
+                    const { progress } = data;
+
+                    setProgress(progress);
+
+                    const step = Math.floor(progress / 10);
+                    if (step > currentStep) {
+                        for (; currentStep < step; currentStep++) {
                             await appendTypedLine(progressMessages[currentStep]);
                         }
                     }
                 }
-                if (done) {
-                    clearTimeout(timeout);
+
+                if (event === "done") {
+                    setProgress(100);
+                    clearAll();
+
+                    const { result, nextTask } = data;
+
                     setAnalyzeResult(result);
                     setNextTask(nextTask);
-                    if (error) {
-                        throw error;
-                    } else {
-                        await appendTypedLine("Analysis complete!");
-                        setTimeout(next, 1500);
-                    }
-                } else {
-                    if (!pollingCancelled) {
-                        setTimeout(poll, BASE_DELAY);
-                    }
-                }
-            } catch (err) {
-                clearTimeout(timeout);
-                console.error(err);
-                await appendTypedLine(`🔴 ${err}`);
-                await appendTypedLine("Please, try again.");
-            }
-        }
 
-        poll();
+                    await appendTypedLine("Analysis complete!");
+
+                    setTimeout(next, 1500);
+                }
+
+                if (event === "failed") {
+                    setProgress(100);
+                    clearAll();
+                    const { error } = data;
+                    await appendTypedLine(`❌ ${error}`);
+                }
+            },
+
+            onError: async (err) => {
+                clearAll();
+                console.error(err);
+                await appendTypedLine(`❌ Cannot subscribe SSE`);
+                await appendTypedLine("Please, try again.");
+            },
+        });
     }
 
     async function appendTypedLine(line = "") {
-        if (!line) return;
+        if (!line) return queueRef.current;
 
-        typingRef.current = true;
+        queueRef.current = queueRef.current.then(async () => {
+            typingRef.current = true;
 
-        for (let i = 0; i < line.length; i++) {
-            setDisplayed((prev) => prev + line[i]);
-            await new Promise((r) => setTimeout(r, 30));
-        }
+            for (let i = 0; i < line.length; i++) {
+                setDisplayed((prev) => prev + line[i]);
+                await new Promise((r) => setTimeout(r, 30));
+            }
 
-        setDisplayed((prev) => prev + "\n");
-        typingRef.current = false;
-    }
+            setDisplayed((prev) => prev + "\n");
+            typingRef.current = false;
+        });
 
-    function dataURLtoFile(dataurl, filename) {
-        const arr = dataurl.split(",");
-        const mime = arr[0].match(/:(.*?);/)[1];
-        const bstr = atob(arr[1]);
-        let n = bstr.length;
-        const u8arr = new Uint8Array(n);
-        while (n--) u8arr[n] = bstr.charCodeAt(n);
-        return new File([u8arr], filename, { type: mime });
+        return queueRef.current;
     }
 
     const progressMessages = [
@@ -137,8 +148,7 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
             <div className="relative w-full">
                 {/* monitor */}
                 <div
-                    ref={monitorRef}
-                    className="absolute text-xs text-lime-500 overflow-auto font-[monospace,emoji] leading-tight"
+                    className="absolute text-xs text-lime-500 font-[monospace,emoji] leading-tight"
                     style={{
                         top: "18%",
                         left: "13%",
@@ -158,10 +168,12 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
                             opacity: 0.7,
                         }}
                     />
-                    <p>BORFLAB 37.987-B</p>
-                    <p>Progress... {progress}%</p>
-                    <span className="whitespace-pre-wrap">{displayed}</span>
-                    <span className="animate-pulse">▋</span>
+                    <div ref={monitorRef} className="overflow-auto h-full">
+                        <p>BORFLAB 37.987-B</p>
+                        <p>Progress... {progress}%</p>
+                        <span className="whitespace-pre-wrap">{displayed}</span>
+                        <span className="animate-pulse">▋</span>
+                    </div>
                 </div>
                 {/* indicators */}
                 <div

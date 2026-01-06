@@ -40,33 +40,62 @@ func (db *DB) UpsertUser(ctx context.Context, u *User) (*User, error) {
 	row := db.Conn.QueryRowContext(
 		ctx,
 		`
-insert into users (privy_id, email, wallet, created, synced)
+insert into users (privy_id, email, wallets, created, synced)
 values ($1, $2, $3, now(), now())
 on conflict (privy_id)
 do update set
 	email = excluded.email,
-	wallet = excluded.wallet,
+	wallets = excluded.wallets,
 	synced = now()
-returning privy_id, email, wallet, created, synced
+returning privy_id, email, wallets, created, synced
 	`,
 		u.PrivyId,
 		nullable(u.Email),
-		nullable(u.Wallet),
+		pq.Array(u.Wallets),
 	)
 
 	var updated User
-	if err := row.Scan(&updated.PrivyId, &updated.Email, &updated.Wallet, &updated.Created, &updated.Synced); err != nil {
+	var wallets pq.StringArray
+
+	if err := row.Scan(&updated.PrivyId, &updated.Email, &wallets, &updated.Created, &updated.Synced); err != nil {
 		return nil, err
 	}
-
+	updated.Wallets = []string(wallets)
 	return &updated, nil
+}
+
+func (db *DB) GetLastSignature(ctx context.Context) (string, error) {
+	var signature string
+	err := db.Conn.QueryRowContext(
+		ctx,
+		`
+select last_signature from solana_meta limit 1;
+	`,
+	).Scan(&signature)
+
+	if err != nil {
+		return signature, err
+	}
+
+	return signature, nil
+}
+
+func (db *DB) SetLastSignature(ctx context.Context, lastSignature string) error {
+	_, err := db.Conn.ExecContext(ctx, `
+update solana_meta set last_signature = $1, updated = now();
+    `, lastSignature)
+
+	if err != nil {
+		return fmt.Errorf("failed to update sync cursor: %w", err)
+	}
+	return nil
 }
 
 func (db *DB) SelectUserByWallet(ctx context.Context, wallet string) (*User, error) {
 	row := db.Conn.QueryRowContext(
 		ctx,
 		`
-select privy_id, email, wallet, created, synced from users
+select privy_id, email, wallets, created, synced from users
 where wallet = $1
 	`,
 		wallet,
@@ -76,7 +105,7 @@ where wallet = $1
 	err := row.Scan(
 		&user.PrivyId,
 		&user.Email,
-		&user.Wallet,
+		&user.Wallets,
 		&user.Created,
 		&user.Synced,
 	)
@@ -168,10 +197,10 @@ group by
 }
 
 func (db *DB) SelectMonsters(ctx context.Context, userId string, limit int, offset int, sort string, order string) ([]Monster, int, error) {
-	var monsters []Monster
+	monsters := make([]Monster, 0)
 	var total int
 
-	countQuery := `select count(*) from monsters where user_id = $1`
+	countQuery := `select count(*) from monsters where user_id = $1 and owner_address is not null and status = 'active';`
 	err := db.Conn.QueryRowContext(ctx, countQuery, userId).Scan(&total)
 	if err != nil {
 		return monsters, 0, err
@@ -204,10 +233,12 @@ select
 	habitat,
 	biome,
 	rarity,
+	stone,
 	metadata_uri,
 	image_cid,
 	serial_number,
 	generation,
+	status,
 	signature,
 	slot,
 	minted,
@@ -241,10 +272,12 @@ from monsters where user_id = $1 order by %s limit $2 offset $3;`, sortOrder),
 			&monster.Habitat,
 			&monster.Biome,
 			&monster.Rarity,
+			&monster.Stone,
 			&monster.MetadataUri,
 			&monster.ImageCid,
 			&monster.SerialNumber,
 			&monster.Generation,
+			&monster.Status,
 			&monster.Signature,
 			&monster.Slot,
 			&monster.Minted,
@@ -256,6 +289,74 @@ from monsters where user_id = $1 order by %s limit $2 offset $3;`, sortOrder),
 		monsters = append(monsters, monster)
 	}
 	return monsters, total, err
+}
+
+func (db *DB) SelectMonster(ctx context.Context, mintAddress string, userId string) (Monster, error) {
+	var monster Monster
+	err := db.Conn.QueryRowContext(
+		ctx,
+		`
+select
+	id,
+	user_id,
+	experiment_id,
+	mint_address,
+	owner_address,
+	stone_mint_address,
+	card_state_address,
+	name,
+	species,
+	lore,
+	movement_class,
+	behaviour,
+	personality,
+	abilities,
+	habitat,
+	biome,
+	rarity,
+	stone,
+	metadata_uri,
+	image_cid,
+	serial_number,
+	generation,
+	status,
+	signature,
+	slot,
+	minted,
+	created
+from monsters where mint_address = $1 and user_id = $2;`, mintAddress, userId).Scan(
+		&monster.Id,
+		&monster.UserId,
+		&monster.ExperimentId,
+		&monster.MintAddress,
+		&monster.OwnerAddress,
+		&monster.StoneMintAddress,
+		&monster.CardStateAddress,
+		&monster.Name,
+		&monster.Species,
+		&monster.Lore,
+		&monster.MovementClass,
+		&monster.Behaviour,
+		&monster.Personality,
+		&monster.Abilities,
+		&monster.Habitat,
+		&monster.Biome,
+		&monster.Rarity,
+		&monster.Stone,
+		&monster.MetadataUri,
+		&monster.ImageCid,
+		&monster.SerialNumber,
+		&monster.Generation,
+		&monster.Status,
+		&monster.Signature,
+		&monster.Slot,
+		&monster.Minted,
+		&monster.Created,
+	)
+	if err != nil {
+		return monster, err
+	}
+	return monster, err
 }
 
 func (db *DB) SelectExperiment(ctx context.Context, id string) (*Experiment, error) {
@@ -438,14 +539,44 @@ select
             count(*) filter (where rarity = 'epic'),
             count(*) filter (where rarity = 'mythic'),
             count(*) filter (where rarity = 'legendary')
-        FROM monsters`,
+        from monsters where owner_address is not null and status = 'active';`,
 	).Scan(&stats.CommonIssued, &stats.RareIssued, &stats.EpicIssued, &stats.MythicIssued, &stats.LegendaryIssued)
 
 	return stats, err
 }
 
-func (db *DB) InsertSolanaNotification(ctx context.Context, n *SolanaNotification) error {
+func (db *DB) RegisterNotificationIfNew(ctx context.Context, sig string, slot int64) (bool, error) {
+	res, err := db.Conn.ExecContext(
+		ctx,
+		`
+        INSERT INTO solana_notifications (signature, slot, stage, created)
+        VALUES ($1, $2, 'processing', now())
+        ON CONFLICT (signature) DO UPDATE 
+        SET 
+            stage = 'processing', 
+            created = now()
+        WHERE 
+            solana_notifications.stage IN ('internal_error', 'event_error', 'business_error')
+            OR 
+            (solana_notifications.stage = 'processing' AND solana_notifications.created < NOW() - INTERVAL '5 minutes')
+        RETURNING id;
+        `,
+		sig,
+		slot,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to register/update notification: %w", err)
+	}
 
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rows > 0, nil
+}
+
+func (db *DB) UpdateSolanaNotification(ctx context.Context, n *SolanaNotification) error {
 	eventsJson, err := json.Marshal(n.Events)
 	if err != nil {
 		return err
@@ -454,28 +585,29 @@ func (db *DB) InsertSolanaNotification(ctx context.Context, n *SolanaNotificatio
 	_, err = db.Conn.ExecContext(
 		ctx,
 		`
-insert into solana_notifications (signature, slot, stage, logs, events)
-values ($1, $2, $3, $4, $5)
-returning id
+        UPDATE solana_notifications 
+        SET stage = $1, 
+            logs = $2, 
+            events = $3
+        WHERE signature = $4
         `,
-		n.Params.Result.Value.Signature,
-		n.Params.Result.Context.Slot,
 		n.Stage,
 		pq.Array(n.Params.Result.Value.Logs),
 		eventsJson,
+		n.Params.Result.Value.Signature,
 	)
 
 	return err
 }
 
 func (db *DB) InsertStoneTx(ctx context.Context, tx *sql.Tx, stone *Stone) error {
-	fmt.Printf("\n%+v\n", stone)
+
 	result, err := tx.ExecContext(
 		ctx,
 		`
 		insert into stones (
 			user_id, mint_address, owner_address, spark_count, type, pda_address, signature, slot, minted
-		) values ((select privy_id from users where wallet = $1), $2, $3, $4, $5, $6, $7, $8, $9)
+		) values ((select privy_id from users where $1 = any(wallets)), $2, $3, $4, $5, $6, $7, $8, $9)
 		on conflict (signature) do nothing
 		`,
 		stone.OwnerAddress,
@@ -528,7 +660,7 @@ func (db *DB) UpdateStoneTx(ctx context.Context, tx *sql.Tx, stoneAddress string
 }
 
 func (db *DB) InsertMonsterTx(ctx context.Context, tx *sql.Tx, monster *Monster) error {
-	_, err := tx.ExecContext(
+	result, err := tx.ExecContext(
 		ctx,
 		`
 insert into monsters (
@@ -548,14 +680,16 @@ insert into monsters (
 	habitat,
 	biome,
 	rarity,
+	stone,
 	metadata_uri,
 	image_cid,
 	serial_number,
 	generation,
+	status,
 	signature,
 	slot,
 	minted
-) values ((select privy_id from users where wallet = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+) values ((select privy_id from users where $1 = any(wallets)), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 on conflict (signature) do nothing
 		`,
 		monster.OwnerAddress,
@@ -574,15 +708,85 @@ on conflict (signature) do nothing
 		monster.Habitat,
 		monster.Biome,
 		monster.Rarity,
+		monster.Stone,
 		monster.MetadataUri,
 		monster.ImageCid,
 		monster.SerialNumber,
 		monster.Generation,
+		monster.Status,
 		monster.Signature,
 		monster.Slot,
 		monster.Minted,
 	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows insert for monster: %s", monster.MintAddress)
+	}
 	return err
+}
+func (db *DB) SwapMonsterTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	ownerAddress string,
+	lostMint string,
+	gainedMint string,
+) error {
+
+	res, err := tx.ExecContext(
+		ctx,
+		`
+UPDATE monsters
+SET owner_address = NULL, user_id = NULL, status = 'in_pool'
+WHERE mint_address = $1
+  AND owner_address = $2
+  AND status = 'active'
+`,
+		lostMint,
+		ownerAddress,
+	)
+	if err != nil {
+		return err
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("lost monster not updated")
+	}
+
+	res, err = tx.ExecContext(
+		ctx,
+		`
+UPDATE monsters
+SET user_id = (select privy_id from users where $1 = any(wallets)), owner_address = $1, status = 'active'
+WHERE mint_address = $2
+  AND status = 'in_pool'
+`,
+		ownerAddress,
+		gainedMint,
+	)
+	if err != nil {
+		return err
+	}
+
+	affected, err = res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("gained monster not updated")
+	}
+
+	return nil
 }
 
 func (db *DB) SelectTxStatus(ctx context.Context, signature string) (bool, error) {

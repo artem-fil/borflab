@@ -1,72 +1,84 @@
 package main
 
 import (
-	"encoding/json"
 	"sync"
 )
 
 type SSEMessage struct {
-	Status string
-	Data   map[string]any
+	Event string `json:"event"`
+	Data  any    `json:"data,omitempty"`
 }
 
 type subscription struct {
-	txid string
+	key  string
 	conn chan SSEMessage
 }
-
 type SSEAgent struct {
 	sync.RWMutex
-	subscriptions map[string][]*subscription
+	subs map[string][]*subscription
+}
+
+type TaskStatus struct {
+	Progress   int    `json:"progress"`
+	Done       bool   `json:"done"`
+	Error      string `json:"error,omitempty"`
+	Result     any    `json:"result,omitempty"`
+	NextTaskId string `json:"nextTask,omitempty"`
+}
+
+type Task struct {
+	Status *TaskStatus
 }
 
 func NewSSEAgent() *SSEAgent {
 	return &SSEAgent{
-		subscriptions: make(map[string][]*subscription),
+		subs: make(map[string][]*subscription),
 	}
 }
 
-func (a *SSEAgent) AddSubscription(txid string, sub *subscription) {
+func (a *SSEAgent) Subscribe(key string) *subscription {
+	sub := &subscription{
+		key:  key,
+		conn: make(chan SSEMessage, 16),
+	}
+
 	a.Lock()
-	defer a.Unlock()
-	a.subscriptions[txid] = append(a.subscriptions[txid], sub)
+	a.subs[key] = append(a.subs[key], sub)
+	a.Unlock()
+
+	return sub
 }
 
-func (a *SSEAgent) RemoveSubscription(txid string, sub *subscription) {
+func (a *SSEAgent) Unsubscribe(sub *subscription) {
 	a.Lock()
 	defer a.Unlock()
-	subs := a.subscriptions[txid]
+
+	subs := a.subs[sub.key]
 	for i, s := range subs {
 		if s == sub {
-			a.subscriptions[txid] = append(subs[:i], subs[i+1:]...)
+			a.subs[sub.key] = append(subs[:i], subs[i+1:]...)
 			break
 		}
 	}
-	if len(a.subscriptions[txid]) == 0 {
-		delete(a.subscriptions, txid)
+	if len(a.subs[sub.key]) == 0 {
+		delete(a.subs, sub.key)
 	}
+	close(sub.conn)
 }
 
-func (a *SSEAgent) NotifySubscribers(txid string, msg SSEMessage) {
+func (a *SSEAgent) Emit(key, event string, data any) {
 	a.RLock()
-	subs := a.subscriptions[txid]
+	subs := a.subs[key]
 	a.RUnlock()
 
+	msg := SSEMessage{
+		Event: event,
+		Data:  data,
+	}
 	for _, sub := range subs {
 		select {
 		case sub.conn <- msg:
 		default:
 		}
 	}
-
-	if msg.Status == "confirmed" || msg.Status == "failed" {
-		a.Lock()
-		delete(a.subscriptions, txid)
-		a.Unlock()
-	}
-}
-
-func (m SSEMessage) JSON() string {
-	b, _ := json.Marshal(m)
-	return string(b)
 }

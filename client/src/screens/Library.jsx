@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import Card from "../components/Card";
-import Button from "../components/Button";
+import Card from "@components/Card";
+import Button from "@components/Button";
 
 import api from "../api";
 
@@ -13,6 +13,7 @@ export default function Library() {
     const [monsters, setMonsters] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [loadedImages, setLoadedImages] = useState({});
     const [monsterDialog, setMonsterDialog] = useState(false);
 
     const [pagination, setPagination] = useState({
@@ -59,7 +60,6 @@ export default function Library() {
     };
 
     const handleSortChange = (newSort) => {
-        console.log(newSort);
         if (newSort === pagination.sort) {
             setPagination((prev) => ({
                 ...prev,
@@ -79,12 +79,6 @@ export default function Library() {
     return (
         <div className="flex-grow flex flex-col items-center">
             <div className="w-full flex justify-between px-6 py-2">
-                <div className="flex flex-col">
-                    <h2 className="text-white font-bold text-xl">BORFcard Library</h2>
-                    <span className="text-xs">
-                        Total cards in collection: {String(pagination.total).padStart(3, "0")}
-                    </span>
-                </div>
                 <div className="relative">
                     <Button onClick={() => setOpenSort(!openSort)} label={"sort"} />
                     <div
@@ -109,6 +103,12 @@ export default function Library() {
                         })}
                     </div>
                 </div>
+                <div className="flex flex-col">
+                    <h2 className="text-white font-bold text-xl">BORFcard Library</h2>
+                    <span className="text-xs">
+                        Total cards in collection: {String(pagination.total).padStart(3, "0")}
+                    </span>
+                </div>
             </div>
             <div className="w-full h-4 bg-gray-100 border-b-2 border-black shadow-md"></div>
             <div className="w-full flex-grow bg-stone-800 px-6 py-2">
@@ -121,23 +121,34 @@ export default function Library() {
                     </div>
                 ) : (
                     <div className="grid grid-cols-3 gap-x-4 gap-y-2 w-full h-full">
-                        {monsters.map((monster, i) => (
-                            <div
-                                key={i}
-                                onClick={() => setMonsterDialog(monster)}
-                                className="flex flex-col gap-1 items-center uppercase text-xs"
-                            >
-                                <div className="w-full aspect-[3/4] bg-gray-200 rounded-md overflow-hidden">
-                                    <img
-                                        src={`https://ipfs.io/ipfs/${monster.ImageCid}`}
-                                        alt={`specimen ${monster.SerialNumber}`}
-                                        className="h-full object-cover"
-                                    />
+                        {monsters.map((monster) => {
+                            const isLoaded = loadedImages[monster.SerialNumber];
+                            return (
+                                <div
+                                    key={monster.SerialNumber}
+                                    onClick={() => setMonsterDialog(monster)}
+                                    className="flex flex-col gap-1 items-center uppercase text-xs"
+                                >
+                                    <div className="w-full aspect-[3/4] bg-gray-200 rounded-md overflow-hidden relative">
+                                        <img
+                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${monster.ImageCid}`}
+                                            alt={`specimen ${monster.SerialNumber}`}
+                                            className={`h-full w-full object-cover transition-opacity duration-500 ${
+                                                isLoaded ? "opacity-100" : "opacity-0"
+                                            }`}
+                                            onLoad={() =>
+                                                setLoadedImages((prev) => ({ ...prev, [monster.SerialNumber]: true }))
+                                            }
+                                        />
+                                        {!isLoaded && (
+                                            <div className="absolute inset-0 animate-pulse bg-gray-300"></div>
+                                        )}
+                                    </div>
+                                    <span className={`${RARITIES[monster.Rarity]}`}>{monster.Name}</span>
+                                    <span className="text-white">{monster.Biome}</span>
                                 </div>
-                                <span className={`${RARITIES[monster.Rarity]}`}>{monster.Name}</span>
-                                <span className="text-white">{monster.Biome}</span>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 )}
             </div>

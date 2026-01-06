@@ -35,13 +35,14 @@ cd $(project)
 sudo mkdir -p $(dst)
 
 sudo chown -R $(serv_user):$(serv_user) $(dst)
-sudo install -o $(serv_user) -g $(serv_user) -D -t $(dst) $(project)
+sudo install -o $(serv_user) -g $(serv_user) /tmp/$(project) $(dst)/$(project);
 
 sudo chown -R $(serv_user):$(serv_user) $(dst)
 sudo systemctl restart $(project)
 endef
 
 deploy-server: build
+	scp /tmp/$(project) $(server):/tmp/
 	$(file > /tmp/deploy-$(project).sh,$(deploy_server_script))
 	ssh $(server) "bash -s" < /tmp/deploy-$(project).sh
 

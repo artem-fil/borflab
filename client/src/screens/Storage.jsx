@@ -4,19 +4,19 @@ import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 
 import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
-import Stone from "../components/Stone";
-import Button from "../components/Button";
+import Stone from "@components/Stone";
+import Button from "@components/Button";
 
-import storageImage from "../assets/storage.jpg";
-import agateImage from "../assets/agate.png";
-import jadeImage from "../assets/jade.png";
-import topazImage from "../assets/topaz.png";
-import quartzImage from "../assets/quartz.png";
-import sapphireImage from "../assets/sapphire.png";
-import amazoniteImage from "../assets/amazonite.png";
-import rubyImage from "../assets/ruby.png";
+import storageImage from "@images/storage.jpg";
+import agateImage from "@images/agate.png";
+import jadeImage from "@images/jade.png";
+import topazImage from "@images/topaz.png";
+import quartzImage from "@images/quartz.png";
+import sapphireImage from "@images/sapphire.png";
+import amazoniteImage from "@images/amazonite.png";
+import rubyImage from "@images/ruby.png";
 
 import api from "../api";
 
@@ -25,11 +25,14 @@ const ENDPOINT = "https://api.devnet.solana.com";
 export default function Storage() {
     const { wallets } = useWallets();
     const { signTransaction } = useSignTransaction();
-    const solanaWallet = wallets[0];
-
+    const storedWallet = localStorage.getItem("primaryWallet");
+    const solanaWallet = wallets.find((w) => w.address === storedWallet) || wallets[0];
+    const navigate = useNavigate();
+    const [sparkCount, setSparkCount] = useState(0);
     const [stoneDialog, setStoneDialog] = useState(false);
     const [availableStones, setAvailableStones] = useState({});
     const [loading, setLoading] = useState(true);
+    const [preparing, setIsPreparing] = useState(false);
     const [minting, setIsMinting] = useState(false);
     const [mintSuccess, setMintSuccess] = useState(false);
     const [mintError, setMintError] = useState(false);
@@ -38,20 +41,22 @@ export default function Storage() {
     const mintFinishedRef = useRef(false);
 
     useEffect(() => {
-        if (solanaWallet?.address) {
-            loadStonesData();
-        }
-    }, [solanaWallet?.address]);
+        loadStonesData();
+    }, []);
 
     async function loadStonesData() {
         setLoading(true);
         try {
+            let sum = 0;
+
             const stones = await api.getStones();
             const s = {};
 
             for (let stone of stones) {
                 s[stone.Type] = stone.SparkCount;
+                sum += stone.SparkCount;
             }
+            setSparkCount(sum);
 
             setAvailableStones(s);
         } catch (error) {
@@ -63,10 +68,10 @@ export default function Storage() {
     }
 
     async function mintStone() {
-        if (minting) {
-            return;
-        }
+        if (minting || preparing) return;
+
         try {
+            setIsPreparing(true);
             const { TxBase64 } = await api.prepareStoneMint({
                 userPubKey: solanaWallet.address,
             });
@@ -87,6 +92,7 @@ export default function Storage() {
                 requireAllSignatures: false,
                 verifySignatures: false,
             });
+            setIsPreparing(false);
             const txUint8Array = new Uint8Array(serializedTx);
 
             const { signedTransaction } = await signTransaction({
@@ -114,30 +120,36 @@ export default function Storage() {
             mintSSERef.current?.close();
             mintSSERef.current = null;
 
-            mintSSERef.current = api.checkStoneMint(txid, {
-                onMessage: ({ Status, Data }) => {
-                    if (Status === "confirmed") {
+            mintSSERef.current = api.subscribeSSE(txid, {
+                onEvent: (event, data) => {
+                    if (event === "confirmed") {
                         setMintSuccess(true);
                         mintFinishedRef.current = true;
+
                         clearTimeout(mintTimeoutRef.current);
                         mintTimeoutRef.current = null;
+
                         mintSSERef.current?.close();
                         mintSSERef.current = null;
 
-                        console.log("🎉 Server confirmed mint!", Data);
+                        console.log("🎉 Server confirmed mint!", data);
                         console.log("🎉 Mint successful!");
                     }
 
-                    if (Status === "failed") {
+                    if (event === "failed") {
                         setMintError(true);
                         mintFinishedRef.current = true;
+
                         clearTimeout(mintTimeoutRef.current);
                         mintTimeoutRef.current = null;
+
                         mintSSERef.current?.close();
                         mintSSERef.current = null;
-                        console.error("❌ Mint failed on server");
+
+                        console.error("❌ Mint failed on server", data);
                     }
                 },
+
                 onError: () => {
                     console.warn("⚠️ SSE temporarily disconnected, retrying...");
                 },
@@ -167,231 +179,6 @@ export default function Storage() {
             clearTimeout(mintTimeoutRef.current);
             mintTimeoutRef.current = null;
         }
-
-        // PREV
-        /*
-        try {
-            // === VALIDATION ===
-
-            solanaWallet.publicKey = new PublicKey(solanaWallet.address);
-
-            if (!solanaWallet || !solanaWallet.publicKey || !solanaWallet.signTransaction) {
-                throw new Error("Wallet not connected");
-            }
-
-            // === SETUP ===
-            const programId = new PublicKey(PROGRAM_ID);
-
-            const provider = new anchor.AnchorProvider(connection, solanaWallet, { commitment: "confirmed" });
-            anchor.setProvider(provider);
-
-            const program = new anchor.Program(idl, provider);
-            const collectionMint = new PublicKey(STONE_COLLECTION_MINT);
-
-            console.log("🔧 Program initialized:", programId.toBase58());
-
-            // === STONE TYPE PDAs ===
-            const stoneTypePdas = [];
-            console.log("📊 Fetching stone type stats...");
-
-            for (const stoneType of STONE_TYPES) {
-                const [stoneTypePda] = PublicKey.findProgramAddressSync(
-                    [new TextEncoder().encode("stone_type"), new TextEncoder().encode(stoneType)],
-                    programId
-                );
-                stoneTypePdas.push(stoneTypePda);
-
-                try {
-                    const stoneTypeAccount = await program.account.stoneType.fetch(stoneTypePda);
-                    console.log(
-                        `   ${stoneType}: ${stoneTypeAccount.mintedCount}/${stoneTypeAccount.supplyCap} minted`
-                    );
-                } catch (err) {
-                    console.log(`   ${stoneType}: Not initialized. ${err}`);
-                }
-            }
-
-            // === KEY PAIRS & PDAs ===
-            const [collectionAuthority] = PublicKey.findProgramAddressSync(
-                [new TextEncoder().encode("collection_authority")],
-                programId
-            );
-
-            const mintKeypair = Keypair.generate();
-            const mint = mintKeypair.publicKey;
-
-            console.log("🔑 Generated new mint:", mint.toBase58());
-
-            // === ACCOUNT DERIVATION ===
-            const ownerAta = await getAssociatedTokenAddress(
-                mint,
-                solanaWallet.publicKey,
-                false,
-                TOKEN_PROGRAM_ID,
-                ASSOCIATED_TOKEN_PROGRAM_ID
-            );
-
-            const [stoneStatePda] = PublicKey.findProgramAddressSync(
-                [new TextEncoder().encode("stone_state"), mint.toBytes()],
-                programId
-            );
-
-            const [metadata] = PublicKey.findProgramAddressSync(
-                [new TextEncoder().encode("metadata"), TOKEN_METADATA_PROGRAM_ID.toBytes(), mint.toBytes()],
-                TOKEN_METADATA_PROGRAM_ID
-            );
-
-            const [masterEdition] = PublicKey.findProgramAddressSync(
-                [
-                    new TextEncoder().encode("metadata"),
-                    TOKEN_METADATA_PROGRAM_ID.toBytes(),
-                    mint.toBytes(),
-                    new TextEncoder().encode("edition"),
-                ],
-                TOKEN_METADATA_PROGRAM_ID
-            );
-
-            const [collectionMetadata] = PublicKey.findProgramAddressSync(
-                [new TextEncoder().encode("metadata"), TOKEN_METADATA_PROGRAM_ID.toBytes(), collectionMint.toBytes()],
-                TOKEN_METADATA_PROGRAM_ID
-            );
-
-            const [collectionMasterEdition] = PublicKey.findProgramAddressSync(
-                [
-                    new TextEncoder().encode("metadata"),
-                    TOKEN_METADATA_PROGRAM_ID.toBytes(),
-                    collectionMint.toBytes(),
-                    new TextEncoder().encode("edition"),
-                ],
-                TOKEN_METADATA_PROGRAM_ID
-            );
-
-            const [treasury] = PublicKey.findProgramAddressSync([new TextEncoder().encode("treasury")], programId);
-
-            // === TRANSACTION CONSTRUCTION ===
-            const mintRent = await connection.getMinimumBalanceForRentExemption(82);
-            const createMintAccountIx = SystemProgram.createAccount({
-                fromPubkey: solanaWallet.publicKey,
-                newAccountPubkey: mint,
-                space: 82,
-                lamports: mintRent,
-                programId: TOKEN_PROGRAM_ID,
-            });
-
-            console.log("📦 Building transaction...");
-            const user_id = 12345;
-
-            const transaction = await program.methods
-                .mintStoneInstance(user_id)
-                .accounts({
-                    mint,
-                    owner: solanaWallet.publicKey,
-                    ownerAta,
-                    stoneState: stoneStatePda,
-                    collectionMint,
-                    collectionMetadata,
-                    collectionMasterEdition,
-                    metadata,
-                    masterEdition,
-                    collectionAuthority,
-                    treasury,
-                    tokenProgram: TOKEN_PROGRAM_ID,
-                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-                    systemProgram: SystemProgram.programId,
-                    tokenMetadataProgram: TOKEN_METADATA_PROGRAM_ID,
-                    rent: SYSVAR_RENT_PUBKEY,
-                    recentBlockhashes: SYSVAR_RECENT_BLOCKHASHES,
-                })
-                .remainingAccounts(
-                    stoneTypePdas.map((pda) => ({
-                        pubkey: pda,
-                        isWritable: true,
-                        isSigner: false,
-                    }))
-                )
-                .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }), createMintAccountIx])
-                .signers([mintKeypair])
-                .transaction();
-
-            // === TRANSACTION SIGNING ===
-            console.log("✍️ Signing transaction...");
-
-            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-
-            transaction.recentBlockhash = blockhash;
-            transaction.feePayer = solanaWallet.publicKey;
-            transaction.partialSign(mintKeypair);
-
-            const serializedTx = transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
-            const txUint8Array = new Uint8Array(serializedTx);
-
-            const { signedTransaction } = await signTransaction({
-                wallet: solanaWallet,
-                transaction: txUint8Array,
-                chain: "solana:devnet",
-            });
-
-            console.log("🚀 Sending transaction...");
-
-            const txid = await connection.sendRawTransaction(signedTransaction);
-
-            const confirmation = await connection.confirmTransaction(
-                {
-                    signature: txid,
-                    blockhash,
-                    lastValidBlockHeight,
-                },
-                "confirmed"
-            );
-
-            if (confirmation.value.err) {
-                throw new Error(`Transaction failed: ${confirmation.value.err}`);
-            }
-
-            // === POST-MINT VERIFICATION ===
-            console.log("✅ NFT minted successfully!");
-            console.log("🎉 Result:");
-            console.log(`   Transaction: ${txid}`);
-            console.log(`   Mint: ${mint.toBase58()}`);
-            console.log(`   Explorer: https://explorer.solana.com/address/${mint.toBase58()}?cluster=devnet`);
-            console.log(`   TX Explorer: https://explorer.solana.com/tx/${txid}?cluster=devnet`);
-
-            const stoneState = await program.account.stoneState.fetch(stoneStatePda);
-            console.log("🎮 Stone state:");
-            console.log(`   Sparks: ${stoneState.sparksRemaining}/42`);
-
-            console.log("📊 Updated stone type stats:");
-            for (const stoneType of STONE_TYPES) {
-                const [stoneTypePda] = PublicKey.findProgramAddressSync(
-                    [new TextEncoder().encode("stone_type"), new TextEncoder().encode(stoneType)],
-                    programId
-                );
-
-                try {
-                    const stoneTypeAccount = await program.account.stoneType.fetch(stoneTypePda);
-                    console.log(
-                        `   ${stoneType}: ${stoneTypeAccount.mintedCount}/${stoneTypeAccount.supplyCap} minted`
-                    );
-                } catch (err) {
-                    console.log(`   ${stoneType}: Not initialized. ${err}`);
-                }
-            }
-
-            return {
-                txid,
-                mint: mint.toBase58(),
-            };
-        } catch (error) {
-            console.error("❌ Minting failed:", error);
-
-            if (error.logs) {
-                console.error("📋 Transaction logs:");
-                error.logs.forEach((log) => console.error(`${log}`));
-            }
-
-            throw error;
-        }
-            */
     }
 
     const formatSparks = (type) => (loading ? "..." : (availableStones[type] || 0).toString().padStart(2, "0"));
@@ -405,7 +192,7 @@ export default function Storage() {
                 </div>
             </div>
             <div className="w-full h-4 bg-gray-100 border-b-2 border-black shadow-md"></div>
-            <div className="w-full flex-grow flex items-center">
+            <div className="w-full flex-grow flex items-center justify-center">
                 {stoneDialog ? (
                     <div className="flex relative items-center justify-center w-full h-full p-6">
                         <button className="absolute top-2 right-2" onClick={() => setStoneDialog(null)}>
@@ -415,6 +202,7 @@ export default function Storage() {
                     </div>
                 ) : (
                     <div className="relative">
+                        <img src={storageImage} alt="storage" className="w-full h-auto object-contain" />
                         <img
                             src={agateImage}
                             style={{
@@ -606,25 +394,52 @@ export default function Storage() {
                                 left: "67%",
                             }}
                         >
-                            {`sparks >>`}
+                            {`${sparkCount} sparks`}
                         </div>
-                        <img src={storageImage} alt="storage" className="w-full h-auto object-contain" />
                     </div>
                 )}
             </div>
             <div className="w-full h-4 bg-gray-100 shadow-md"></div>
-            <div className="py-2">
+            <div className="py-2 flex gap-4">
                 <Button disabled={!solanaWallet} onClick={mintStone} alt label={"mint"} />
+                <Button onClick={() => navigate("/lab")} alt label={"go lab"} />
             </div>
+            {preparing &&
+                createPortal(
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+                        <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
+                            <svg
+                                className="animate-spin h-10 w-10 mb-4 text-white"
+                                xmlns="http://www.w3.org/2000/svg"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    className="opacity-75"
+                                    fill="currentColor"
+                                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                                />
+                            </svg>
+                            <span>Preparing...</span>
+                        </div>
+                    </div>,
+                    document.body
+                )}
             {minting &&
                 createPortal(
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
                         {mintFinishedRef.current ? (
                             <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
                                 {mintSuccess && (
-                                    <div className="flex flex-col items-center">
+                                    <div
+                                        onClick={() => {
+                                            loadStonesData();
+                                            setIsMinting(false);
+                                        }}
+                                        className="flex flex-col items-center"
+                                    >
                                         <span className="text-green-400 font-bold">🥳 Minted successfully!</span>
-                                        <Link to={`/library`}>Check monster 👉</Link>
+                                        <span>Check 👉</span>
                                     </div>
                                 )}
                                 {mintError && <div className="text-red-400 font-bold">😖 Mint failed!</div>}

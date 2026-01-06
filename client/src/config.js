@@ -1,19 +1,14 @@
 import { PublicKey, clusterApiUrl } from "@solana/web3.js";
 
-import agateFull from "./assets/agate.png";
-import jadeFull from "./assets/jade.png";
-import topazFull from "./assets/topaz.png";
-import quartzFull from "./assets/quartz.png";
-import sapphireFull from "./assets/sapphire.png";
-import amazoniteFull from "./assets/amazonite.png";
-import rubyFull from "./assets/ruby.png";
-import agateThumb from "./assets/agate_thumb.png";
-import jadeThumb from "./assets/jade_thumb.png";
-import topazThumb from "./assets/topaz_thumb.png";
-import quartzThumb from "./assets/quartz_thumb.png";
-import sapphireThumb from "./assets/sapphire_thumb.png";
-import amazoniteThumb from "./assets/amazonite_thumb.png";
-import rubyThumb from "./assets/ruby_thumb.png";
+import agate from "@images/agate.png";
+import jade from "@images/jade.png";
+import topaz from "@images/topaz.png";
+import quartz from "@images/quartz.png";
+import sapphire from "@images/sapphire.png";
+import amazonite from "@images/amazonite.png";
+import ruby from "@images/ruby.png";
+import pack10 from "@images/pack10.png";
+import pack25 from "@images/pack25.png";
 
 const CLUSTER = "devnet";
 
@@ -23,8 +18,7 @@ export const TOKEN_METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkY
 
 export const STONES = {
     Agate: {
-        thumb: agateThumb,
-        full: agateFull,
+        image: agate,
         species: "stone sentinel",
         lore: "tbd",
         rarity: "epic",
@@ -36,8 +30,7 @@ export const STONES = {
             "Agate monsters absorb incoming force, reflect energy, and lock down a position. They are immovable until they choose to be otherwise.",
     },
     Sapphire: {
-        thumb: sapphireThumb,
-        full: sapphireFull,
+        image: sapphire,
         species: "deepwave oracle",
         lore: "tbd",
         rarity: "epic",
@@ -49,8 +42,7 @@ export const STONES = {
             "Sapphire sparks enable control of water flow, creation of rhythm-based pulses, or even short time-delay effects. Their influence is rarely loud, but always pivotal.",
     },
     Ruby: {
-        thumb: rubyThumb,
-        full: rubyFull,
+        image: ruby,
         species: "heartfire catalyst",
         lore: "tbd",
         rarity: "epic",
@@ -62,8 +54,7 @@ export const STONES = {
             "In battle, Ruby sparks unleash sudden bursts of strength or flame, acting as frontline initiators. Their aura is a warning: “Do not provoke unless prepared to burn.”",
     },
     Quartz: {
-        thumb: quartzThumb,
-        full: quartzFull,
+        image: quartz,
         species: "base namibian",
         lore: "tbd",
         rarity: "common",
@@ -75,8 +66,7 @@ export const STONES = {
             "Their presence amplifies natural strengths: they stabilize unstable beings, diffuse conflict, and offer quiet clarity. When in proximity to chaos, Quartz monsters become the eye of the storm.",
     },
     Amazonite: {
-        thumb: amazoniteThumb,
-        full: amazoniteFull,
+        image: amazonite,
         species: "twilight wanderer",
         lore: "tbd",
         rarity: "rare",
@@ -88,8 +78,7 @@ export const STONES = {
             "Gifted with the ability to phase briefly between visible states or perceive hidden echoes in terrain, they navigate by intuition and resonance rather than sight. Lightning fuels their brief surges of motion.",
     },
     Jade: {
-        thumb: jadeThumb,
-        full: jadeFull,
+        image: jade,
         species: "verdant guardian",
         lore: "tbd",
         rarity: "legendary",
@@ -101,8 +90,7 @@ export const STONES = {
             "Channel restorative forces, creating shields or verdant bursts of life energy. Can block corruption, mend terrain, and anchor reality in unstable zones. Their power is silent, but absolute.",
     },
     Topaz: {
-        thumb: topazThumb,
-        full: topazFull,
+        image: topaz,
         species: "skyfire seer",
         lore: "tbd",
         rarity: "mythic",
@@ -118,7 +106,25 @@ export const STONES = {
 export const RARITIES = {
     common: "text-white",
     rare: "text-blue-500",
-    mythic: "text-yellow-500",
     epic: "text-purple-500",
+    mythic: "text-yellow-500",
     legendary: "text-red-500",
+};
+
+export const BIOMES = {
+    amazonia: {
+        bg: `bg-green-700`,
+        border: `border-green-700`,
+        text: `text-green-700`,
+    },
+    plushland: {
+        bg: `bg-pink-700`,
+        border: `border-pink-700`,
+        text: `text-pink-700`,
+    },
+};
+
+export const PRODUCTS = {
+    pack10: pack10,
+    pack25: pack25,
 };

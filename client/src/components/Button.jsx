@@ -1,5 +1,5 @@
-import bg from "../assets/button.png";
-import bgAlt from "../assets/button_alt.png";
+import bg from "@images/button.png";
+import bgAlt from "@images/button_alt.png";
 
 export default function Button({ onClick, disabled, label, alt = false }) {
     return (

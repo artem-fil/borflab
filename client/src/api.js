@@ -1,14 +1,26 @@
 import store from "./store.js";
 
 const isProd = !document.location.hostname.endsWith("localhost");
-const BASE_URL = isProd ? "https://borflab.com/api" : "http://127.0.0.1:8282";
+const BASE_URL = isProd ? "https://borflab.com" : "http://127.0.0.1:8282";
 
-async function request(endpoint, { method = "GET", body, timeout = 10000, signal, headers = {}, params = {} } = {}) {
+async function request(endpoint, options = {}) {
+    const { method = "GET", body, timeout = 10000, signal: externalSignal, headers = {}, params = {} } = options;
     const token = store.getToken();
 
-    const controller = signal ? null : new AbortController();
-    const id = controller ? setTimeout(() => controller.abort(), timeout) : null;
-    const effectiveSignal = signal || controller?.signal;
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    const timeoutId = setTimeout(() => {
+        controller.abort(new Error("Timeout"));
+    }, timeout);
+
+    if (externalSignal) {
+        if (externalSignal.aborted) {
+            controller.abort(externalSignal.reason);
+        } else {
+            externalSignal.addEventListener("abort", () => controller.abort(externalSignal.reason), { once: true });
+        }
+    }
 
     const url = new URL(`${BASE_URL}${endpoint}`);
 
@@ -29,10 +41,8 @@ async function request(endpoint, { method = "GET", body, timeout = 10000, signal
                 ...headers,
             },
             ...(body ? { body: body instanceof FormData ? body : JSON.stringify(body) } : {}),
-            signal: effectiveSignal,
+            signal,
         });
-
-        if (controller) clearTimeout(id);
 
         if (!res.ok) {
             if (res.status === 401) {
@@ -40,31 +50,33 @@ async function request(endpoint, { method = "GET", body, timeout = 10000, signal
                 window.location.href = "/signup";
             }
 
-            let msg;
-            try {
-                const data = await res.json();
-                msg = data.error || res.statusText;
-            } catch {
-                msg = res.statusText;
-            }
-            throw new Error(`API error ${res.status}: ${msg}`);
+            const data = await res.json().catch(() => ({}));
+            const msg = data.error || data.message || res.statusText;
+
+            throw new Error(`API Error ${res.status}: ${msg}`);
         }
 
-        try {
-            return await res.json();
-        } catch {
-            return {};
+        const contentType = res.headers.get("content-type");
+        if (res.status === 204 || !contentType?.includes("application/json")) {
+            return null;
         }
+
+        return await res.json();
     } catch (err) {
-        if (controller) clearTimeout(id);
-        if (err.name === "AbortError") throw new Error("Request aborted or timeout");
+        if (err.name === "AbortError") {
+            const abortError = new Error(err.message === "Timeout" ? "Request timeout" : "Request aborted");
+            abortError.aborted = true;
+            throw abortError;
+        }
         throw err;
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
 export default {
     async syncUser(user) {
-        return request("/users/sync", {
+        return request("/api/users/sync", {
             method: "POST",
             body: {
                 id: user.id,
@@ -75,11 +87,11 @@ export default {
     },
 
     async getStones() {
-        return request("/stones");
+        return request("/api/stones");
     },
 
     async getMonsters({ page, limit, sort, order } = {}) {
-        return request("/monsters", {
+        return request("/api/monsters", {
             params: {
                 page: page ?? 1,
                 limit: limit ?? 10,
@@ -89,86 +101,71 @@ export default {
         });
     },
 
-    async analyze(formData, signal) {
-        return request("/analyze", {
+    async analyze(formData) {
+        return request("/api/analyze", {
             method: "POST",
             body: formData,
-            timeout: 60000,
-            signal,
         });
     },
 
-    async progress(taskId) {
-        return request(`/progress/${taskId}`);
-    },
-
     async prepareMonsterMint(id, body) {
-        return request(`/prepare-monster-mint/${id}`, {
+        return request(`/api/prepare-monster-mint/${id}`, {
             method: "POST",
             body,
         });
     },
 
     async prepareStoneMint(body) {
-        return request(`/prepare-stone-mint`, {
+        return request(`/api/prepare-stone-mint`, {
             method: "POST",
             body,
         });
     },
 
-    checkMonsterMint(txid, { onMessage, onError } = {}) {
-        const url = new URL(`${BASE_URL}/check-mint/${txid}`);
-
-        const es = new EventSource(url.toString());
-
-        es.onmessage = (event) => {
-            try {
-                console.log(event);
-                console.log(event.data);
-                const data = JSON.parse(event.data);
-                onMessage(data);
-            } catch (e) {
-                console.error("SSE parse error", e);
-            }
-        };
-
-        es.onerror = (err) => {
-            console.error("SSE error", err);
-            onError?.(err);
-        };
-
-        return {
-            close: () => {
-                es.close();
-            },
-        };
+    async swapMonster(body) {
+        return request(`/api/prepare-monster-swap`, {
+            method: "POST",
+            body,
+        });
     },
 
-    checkStoneMint(txid, { onMessage, onError } = {}) {
-        const url = new URL(`${BASE_URL}/check-mint/${txid}`);
+    async createPayment(body) {
+        return request(`/api/create-payment/`, {
+            method: "POST",
+            body,
+        });
+    },
 
+    async getProducts() {
+        return request(`/api/products/`);
+    },
+
+    subscribeSSE(key, { onEvent, onError } = {}) {
+        const url = new URL(`${BASE_URL}/sse/subscribe/${key}`);
         const es = new EventSource(url.toString());
 
-        es.onmessage = (event) => {
+        const handler = (event) => {
             try {
-                console.log(event);
-                console.log(event.data);
-                const data = JSON.parse(event.data);
-                onMessage(data);
+                const data = event.data ? JSON.parse(event.data) : null;
+                onEvent?.(event.type, data);
             } catch (e) {
                 console.error("SSE parse error", e);
             }
         };
 
+        es.addEventListener("progress", handler);
+        es.addEventListener("confirmed", handler);
+        es.addEventListener("failed", handler);
+        es.addEventListener("done", handler);
+
         es.onerror = (err) => {
             console.error("SSE error", err);
             onError?.(err);
+            es.close();
         };
 
         return {
-            close: () => {
-                es.close();
-            },
+            close: () => es.close(),
         };
     },
 };

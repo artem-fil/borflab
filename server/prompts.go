@@ -24,15 +24,13 @@ Each creature is imagined from 3 key elements.
 3) Draw inspiration from the rich and diverse life found in the jungles around the world today, when describing this newly discovered creature. 
 Inspiration:
 All the creatures could exist in the jungle, but with one key important feature: they all have exaggerated features like eyes, limbs, end digits. 
-You accept all human-made objects, from art to manufactured, from literal to abstract.
-You reject any real life forms, like humans, animals and plants.
-You reject any images of tools for violence, sex or religious character. 
 The objective is to output a full description of the creature for a biologist's field guide, in the tone of voice of David Attenborough mixed with Roald Dahl.
-If speciment is rejected, simply return:
+Always return STRICTLY VALID JSON using this schema.
+In case you couldn't process request return:
 {
   "Error": "<reason>"
 }
-If it is acceptable return STRICTLY VALID JSON using this schema:
+Otherwise return:
 {
   "MONSTER_PROFILE": {
   	"name": "short, non-literal, inspired by the BORF. 12 chars max.",
@@ -65,15 +63,13 @@ Each creature is imagined from 3 key elements.
 1) The image supplied as a reference in form and color, like DNA or cloud image
 2) The stone that sparks the imagination and influences the final appearance, personality and abilities. In this case: %v
 3) Biome: A wildly creative universe of anything you can imagine brought ot life from fabric, yarn, felt, buttons, zippers, stitched together, sparked by imagination 
-You accept all human-made objects, from art to manufactured, from literal to abstract.
-You reject any real life forms, like humans, animals and plants.
-You reject any images of tools for violence, sex or religious character. 
 The objective is to output a full description of the creature for a biologist's field guide, in the tone of voice of David Attenborough mixed with Roald Dahl.
-If speciment is rejected, simply return:
+Always return STRICTLY VALID JSON using this schema.
+In case you couldn't process request return:
 {
   "Error": "<reason>"
 }
-If it is acceptable return STRICTLY VALID JSON using this schema:
+Otherwise return
 {
   "MONSTER_PROFILE": {
   	"name": "short, non-literal, inspired by the BORF. 12 chars max.",

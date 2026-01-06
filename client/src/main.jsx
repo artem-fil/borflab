@@ -2,11 +2,15 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { PrivyProvider } from "@privy-io/react-auth";
-import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
+import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
+import { createSolanaRpc } from "@solana/kit";
+
 import "./index.css";
 import App from "./App.jsx";
 
 const appId = "cmggax81g00zgh20b0z7052t6";
+
+const solanaConnectors = toSolanaWalletConnectors({ shouldAutoConnect: true });
 
 createRoot(document.getElementById("root")).render(
     <StrictMode>
@@ -20,10 +24,9 @@ createRoot(document.getElementById("root")).render(
                     },
                     defaultChain: "solana:devnet",
                 },
-                walletConnect: {
+                externalWallets: {
                     solana: {
-                        rpcUrl: "https://api.devnet.solana.com",
-                        chainId: "devnet",
+                        connectors: solanaConnectors,
                     },
                 },
                 solana: {

@@ -1,5 +1,5 @@
-import cardbackImg from "../assets/card-back.png";
-import cardfrontImg from "../assets/card-front.png";
+import cardbackImg from "@images/card-back.png";
+import cardfrontImg from "@images/card-front.png";
 
 import { useState } from "react";
 
@@ -7,7 +7,7 @@ import { STONES } from "../config.js";
 
 export default function Stone({ type }) {
     const [flipped, setFlipped] = useState(false);
-    const { thumb, lore, full, rarity, appearance, personality, abilities, species } = STONES[type];
+    const { image, lore, rarity, appearance, personality, abilities, species } = STONES[type];
 
     return (
         <div
@@ -34,7 +34,7 @@ export default function Stone({ type }) {
                     <div className="flex flex-col w-full h-full rounded-xl border-4 border-green-800 bg-orange-100 outline outline-4 outline-orange-100">
                         <div className="flex justify-between items-center px-1">
                             <p className="uppercase text-2xl px-1 font-bold">{type}</p>
-                            <img src={thumb} className="h-12 object-cover" />
+                            <img src={image} className="h-12 object-cover" />
                         </div>
                         <hr className="border-0 h-0.5 bg-green-800" />
                         <p className="px-1">
@@ -71,7 +71,7 @@ export default function Stone({ type }) {
                             {species}
                         </p>
                         <div className="flex-grow flex overflow-hidden p-1">
-                            <img src={full} className="mr-auto ml-auto h-full object-cover" alt="output" />
+                            <img src={image} className="mr-auto ml-auto h-full object-cover" alt="output" />
                         </div>
                         <hr className="border-0 h-0.5 bg-green-800" />
                         <div className="flex justify-between px-1">

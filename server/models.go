@@ -66,7 +66,7 @@ type RarityStats struct {
 type User struct {
 	PrivyId string
 	Email   string
-	Wallet  string
+	Wallets []string
 	Created time.Time
 	Synced  time.Time
 }
@@ -130,7 +130,7 @@ type Monster struct {
 	Signature        string
 	Slot             int64
 	MintAddress      string
-	OwnerAddress     string
+	OwnerAddress     *string
 	StoneMintAddress string
 	CardStateAddress string
 
@@ -145,8 +145,11 @@ type Monster struct {
 	Habitat       string
 	Biome         Biome
 	Rarity        Rarity
+	Stone         StoneType
 	SerialNumber  int
 	Generation    int
+
+	Status string
 
 	// === metadata ===
 	MetadataUri string
@@ -154,6 +157,11 @@ type Monster struct {
 
 	Minted  time.Time
 	Created time.Time
+}
+
+type Product struct {
+	Id    string
+	Price float64
 }
 
 func (stats *RarityStats) PickRarity(stone StoneType) Rarity {

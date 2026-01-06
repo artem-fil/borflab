@@ -1,14 +1,14 @@
-import { useWallets } from "@privy-io/react-auth/solana";
 import { useState, useEffect, useRef } from "react";
-import posterImg from "../assets/poster.png";
-import igniterImg from "../assets/igniter.png";
-import placeholderImg from "../assets/placeholder.svg";
+import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
+import posterImg from "@images/poster.png";
+import igniterImg from "@images/igniter.png";
+import placeholderImg from "@images/placeholder.svg";
 import api from "../api";
 
 import { STONES } from "../config.js";
 
 export default function Step1({ next, setSpecimen, stone, setStone }) {
-    const { wallets } = useWallets();
     const fileInputRef = useRef(null);
     const typingRef = useRef(false);
     const [preview, setPreview] = useState(null);
@@ -16,8 +16,6 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
     const [showStoneDialog, setShowStoneDialog] = useState(false);
     const [availableStones, setAvailableStones] = useState([]);
     const [loading, setLoading] = useState(true);
-
-    const solanaWallet = wallets[0];
 
     async function appendTypedLine(line = "") {
         if (!line) return;
@@ -34,10 +32,8 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
     }
 
     useEffect(() => {
-        if (solanaWallet?.address) {
-            loadStonesData();
-        }
-    }, [solanaWallet?.address]);
+        loadStonesData();
+    }, []);
 
     async function loadStonesData() {
         setLoading(true);
@@ -73,9 +69,11 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
         if (!file) return;
 
         const reader = new FileReader();
-        reader.onloadend = () => {
-            let img = new Image();
-            img.onload = () => {
+        reader.onloadend = async () => {
+            const img = new Image();
+            img.onload = async () => {
+                let blob;
+
                 const needResize =
                     file.size / 1024 / 1024 > MAX_FILE_SIZE_MB || Math.max(img.width, img.height) > MAX_DIMENSION;
 
@@ -90,20 +88,22 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                     const canvas = document.createElement("canvas");
                     canvas.width = Math.round(img.width * scale);
                     canvas.height = Math.round(img.height * scale);
-
                     const ctx = canvas.getContext("2d");
                     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-                    const resizedDataUrl = canvas.toDataURL(file.type || "image/jpeg");
-                    setPreview(resizedDataUrl);
-                    setSpecimen(resizedDataUrl);
+                    blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.8));
                 } else {
-                    setPreview(reader.result);
-                    setSpecimen(reader.result);
+                    blob = await toBlob(reader.result);
                 }
+
+                const previewUrl = URL.createObjectURL(blob);
+                setPreview(previewUrl);
+                setSpecimen(blob);
+                setShowStoneDialog(true);
             };
             img.src = reader.result;
         };
+
         reader.readAsDataURL(file);
         await appendTypedLine("Specimen uploaded.");
         if (stone) {
@@ -111,6 +111,25 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
             await appendTypedLine("Status: waiting for approval…");
         }
     };
+
+    function toBlob(fileOrDataUrl) {
+        return new Promise((resolve) => {
+            if (fileOrDataUrl instanceof Blob) {
+                resolve(fileOrDataUrl);
+            } else {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement("canvas");
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    const ctx = canvas.getContext("2d");
+                    ctx.drawImage(img, 0, 0);
+                    canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.8);
+                };
+                img.src = fileOrDataUrl;
+            }
+        });
+    }
 
     const isNextEnabled = preview && stone;
 
@@ -149,7 +168,7 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                     style={{ top: "13%", left: "13%", width: "25%" }}
                     onClick={() => setShowStoneDialog(true)}
                 >
-                    {stone && <img src={STONES[stone.Type].thumb} alt={stone.Type} className="h-1/2 object-cover" />}
+                    {stone && <img src={STONES[stone.Type].image} alt={stone.Type} className="h-1/2 object-cover" />}
                 </div>
                 {/* submit */}
                 <button
@@ -187,54 +206,84 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                     <span className="animate-pulse">▋</span>
                 </div>
             </div>
-            {showStoneDialog && (
-                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-10 p-4">
-                    <div className="bg-gray-900 border border-lime-500 rounded-lg p-6 max-w-md w-full">
-                        <h3 className="text-lime-500 text-lg font-bold mb-4 text-center">SELECT STONE</h3>
-                        <div className="grid grid-cols-3 gap-4">
-                            {availableStones.map(({ Type, MintAddress, SparkCount }) => {
-                                const isDisabled = SparkCount <= 0;
-                                const formatted = SparkCount > 0 ? SparkCount.toString().padStart(2, "0") : "00";
+            {showStoneDialog &&
+                createPortal(
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4">
+                        {loading ? (
+                            <svg
+                                className="animate-spin h-10 w-10 mb-4 text-white"
+                                xmlns="http://www.w3.org/2000/svg"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    className="opacity-75"
+                                    fill="currentColor"
+                                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                                />
+                            </svg>
+                        ) : (
+                            <div className="bg-gray-900 border border-lime-500 rounded-lg p-6 max-w-md w-full flex flex-col gap-5">
+                                <h3 className="text-lime-500 text-lg font-bold text-center">SELECT STONE</h3>
+                                <div className="grid grid-cols-4 gap-3">
+                                    {availableStones.map(({ Type, MintAddress, SparkCount }) => {
+                                        const isDisabled = SparkCount <= 0;
+                                        const formatted =
+                                            SparkCount > 0 ? SparkCount.toString().padStart(2, "0") : "00";
 
-                                return (
-                                    <button
-                                        key={Type}
-                                        onClick={() =>
-                                            !isDisabled && handleStoneSelect({ Type, MintAddress, SparkCount })
-                                        }
-                                        disabled={isDisabled}
-                                        className={`flex flex-col items-center rounded-lg transition-colors ${
-                                            isDisabled
-                                                ? "opacity-50 cursor-not-allowed grayscale"
-                                                : "hover:border-lime-500"
-                                        }`}
+                                        return (
+                                            <button
+                                                key={Type}
+                                                onClick={() =>
+                                                    !isDisabled && handleStoneSelect({ Type, MintAddress, SparkCount })
+                                                }
+                                                disabled={isDisabled}
+                                                className={`flex flex-col items-center rounded-lg transition-colors ${
+                                                    isDisabled
+                                                        ? "opacity-50 cursor-not-allowed grayscale"
+                                                        : "hover:border-lime-500"
+                                                }`}
+                                            >
+                                                <div
+                                                    className={`w-14 h-14 rounded-full mb-2 flex items-center justify-center ${
+                                                        isDisabled ? "bg-gray-800" : "bg-gray-700"
+                                                    }`}
+                                                >
+                                                    <img src={STONES[Type].image} alt={Type} />
+                                                </div>
+                                                <span
+                                                    className={`text-xs ${isDisabled ? "text-gray-500" : "text-white"}`}
+                                                >
+                                                    {Type}
+                                                </span>
+                                                <span
+                                                    className={`text-xs ${isDisabled ? "text-gray-500" : "text-white"}`}
+                                                >
+                                                    {formatted}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <div className="flex gap-6">
+                                    <Link
+                                        className="w-1/2 text-center uppercase py-2 border border-lime-500 text-lime-500 rounded-lg hover:bg-lime-500/10 transition-colors"
+                                        to="/storage"
                                     >
-                                        <div
-                                            className={`w-14 h-14 rounded-full mb-2 flex items-center justify-center ${
-                                                isDisabled ? "bg-gray-800" : "bg-gray-700"
-                                            }`}
-                                        >
-                                            <img src={STONES[Type].thumb} alt={Type} />
-                                        </div>
-                                        <span className={`text-xs ${isDisabled ? "text-gray-500" : "text-white"}`}>
-                                            {Type}
-                                        </span>
-                                        <span className={`text-xs ${isDisabled ? "text-gray-500" : "text-white"}`}>
-                                            {formatted}
-                                        </span>
+                                        storage
+                                    </Link>
+                                    <button
+                                        onClick={() => setShowStoneDialog(false)}
+                                        className="w-1/2 text-center  uppercase py-2 border border-lime-500 text-lime-500 rounded-lg hover:bg-lime-500/10 transition-colors"
+                                    >
+                                        close
                                     </button>
-                                );
-                            })}
-                        </div>
-                        <button
-                            onClick={() => setShowStoneDialog(false)}
-                            className="mt-6 w-full py-2 border border-lime-500 text-lime-500 rounded-lg hover:bg-lime-500/10 transition-colors"
-                        >
-                            CANCEL
-                        </button>
-                    </div>
-                </div>
-            )}
+                                </div>
+                            </div>
+                        )}
+                    </div>,
+                    document.body
+                )}
         </div>
     );
 }

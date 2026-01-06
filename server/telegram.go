@@ -61,7 +61,7 @@ func (t *Telegram) SendMessage(channelType ChannelType, format string, args ...a
 		fullText = fmt.Sprintf("```server:%s\n%s```", t.env, messageText)
 		parseMode = "Markdown"
 	case PubChannel:
-		chatID = t.config.DevChannel
+		chatID = t.config.PubChannel
 		fullText = messageText
 		parseMode = ""
 	default:

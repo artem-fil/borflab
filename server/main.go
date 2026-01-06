@@ -49,7 +49,7 @@ func main() {
 	sseAgent := NewSSEAgent()
 
 	// Solana agent
-	solanaAgent := NewSolanaAgent(cfg.Solana, db, rpcClient, sseAgent)
+	solanaAgent := NewSolanaAgent(cfg.Solana, db, rpcClient, sseAgent, telegram)
 	solanaAgentCtx, solanaAgentCancel := context.WithCancel(context.Background())
 	go solanaAgent.Start(solanaAgentCtx)
 

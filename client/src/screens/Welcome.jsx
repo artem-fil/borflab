@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import borflabLogo from "../assets/logo.svg";
+import borflabLogo from "@images/logo.svg";
 
 export default function Welcome() {
     const navigate = useNavigate();

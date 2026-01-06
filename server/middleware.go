@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -15,11 +16,16 @@ import (
 )
 
 type Middleware struct {
-	cfg PrivyConfig
+	pemKey []byte
+	cfg    PrivyConfig
 }
 
 func NewMiddleware(cfg PrivyConfig) *Middleware {
-	return &Middleware{cfg: cfg}
+	pemKey, err := os.ReadFile("secrets/privy_key.pem")
+	if err != nil {
+		panic("failed to read pem key file")
+	}
+	return &Middleware{cfg: cfg, pemKey: pemKey}
 }
 
 type PrivyClaims struct {
@@ -63,18 +69,19 @@ func (c *PrivyClaims) Email() (string, bool) {
 }
 
 // TODO: func (c *PrivyClaims) Account(type string) {} instead?
-func (c *PrivyClaims) Wallet() (string, bool) {
+func (c *PrivyClaims) Wallets() ([]string, bool) {
+	var wallets []string
 	accs, err := c.ParseLinkedAccounts()
 	if err != nil {
-		return "", false
+		return wallets, false
 	}
 
 	for _, acc := range accs {
 		if acc.Type == "wallet" {
-			return acc.Address, true
+			wallets = append(wallets, acc.Address)
 		}
 	}
-	return "", false
+	return wallets, true
 }
 
 func (c *PrivyClaims) Valid(appId string) error {
@@ -118,14 +125,11 @@ func (m *Middleware) RequireAuth(next func(*Responder, *http.Request)) http.Hand
 			&PrivyClaims{},
 			func(token *jwt.Token) (any, error) {
 
-				// TODO: fix this. store as .pem file or read+format once at app start.
-				pem := fmt.Sprintf("-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----", m.cfg.VerificationKey)
-
 				if token.Method.Alg() != jwt.SigningMethodES256.Alg() {
 					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 				}
 
-				pubKey, err := jwt.ParseECPublicKeyFromPEM([]byte(pem))
+				pubKey, err := jwt.ParseECPublicKeyFromPEM(m.pemKey)
 				if err != nil {
 					return nil, fmt.Errorf("failed to parse ECDSA public key: %w", err)
 				}
@@ -168,26 +172,28 @@ func (m *Middleware) CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 
-		allowed := map[string]bool{
-			"https://borflab.com":   true,
-			"http://localhost:7007": true,
-		}
-
-		// curl, postman
-		if origin == "" {
-			host := r.Host
-			if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") {
-				next.ServeHTTP(w, r)
-				return
+		/*
+			allowed := map[string]bool{
+				"https://borflab.com":   true,
+				"http://localhost:7007": true,
 			}
-			http.Error(w, "Missing Origin not allowed", http.StatusForbidden)
-			return
-		}
 
-		if !allowed[origin] {
-			http.Error(w, "Origin not allowed", http.StatusForbidden)
-			return
-		}
+					// curl, postman
+					if origin == "" {
+						host := r.Host
+						if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") {
+							next.ServeHTTP(w, r)
+							return
+						}
+						http.Error(w, "Missing Origin not allowed", http.StatusForbidden)
+						return
+					}
+
+				if !allowed[origin] {
+					http.Error(w, "Origin not allowed", http.StatusForbidden)
+					return
+				}
+		*/
 
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")

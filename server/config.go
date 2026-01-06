@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"strconv"
@@ -18,19 +19,15 @@ type TelegramConfig struct {
 }
 
 type PrivyConfig struct {
-	AppId           string
-	VerificationKey string
-	Wallet          string
+	AppId string
 }
 
 type SolanaConfig struct {
+	PoolKey               []uint8
+	SecretKey             []uint8
 	ProgramId             string
 	CardCollectionPubKey  string
 	StoneCollectionPubKey string
-
-	AdminPublicKey            string
-	CollectionUpdateAuthority string
-	TreasuryPda               string
 }
 
 type PinataConfig struct {
@@ -40,14 +37,15 @@ type PinataConfig struct {
 }
 
 type Config struct {
-	DB          DBConfig
-	Telegram    TelegramConfig
-	Privy       PrivyConfig
-	Solana      SolanaConfig
-	Pinata      PinataConfig
-	OpenAIToken string
-	Port        string
-	Environment string
+	DB               DBConfig
+	Telegram         TelegramConfig
+	Privy            PrivyConfig
+	Solana           SolanaConfig
+	Pinata           PinataConfig
+	OpenAIToken      string
+	StripePrivateKey string
+	Port             string
+	Environment      string
 }
 
 func LoadConfig() (*Config, error) {
@@ -83,14 +81,6 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	privyKey, err := requireEnv("PRIVY_VERIFICATION_KEY")
-	if err != nil {
-		return nil, err
-	}
-	privyWallet, err := requireEnv("PRIVY_WALLET")
-	if err != nil {
-		return nil, err
-	}
 	solanaProgramId, err := requireEnv("SOLANA_PROGRAM_ID")
 	if err != nil {
 		return nil, err
@@ -100,6 +90,10 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	stoneCollectionPubKey, err := requireEnv("SOLANA_STONE_COLLECTION")
+	if err != nil {
+		return nil, err
+	}
+	stripePrivateKey, err := requireEnv("STRIPE_PRIVATE_KEY")
 	if err != nil {
 		return nil, err
 	}
@@ -118,6 +112,26 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	keyData, err := os.ReadFile("secrets/admin_keypair.json")
+	if err != nil {
+		return nil, err
+	}
+	var secretKey []uint8
+	err = json.Unmarshal(keyData, &secretKey)
+	if err != nil {
+		return nil, err
+	}
+
+	poolKeyData, err := os.ReadFile("secrets/pool_keypair.json")
+	if err != nil {
+		return nil, err
+	}
+	var poolKey []uint8
+	err = json.Unmarshal(poolKeyData, &poolKey)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
 		DB: DBConfig{
 			ConnURL: dbURL,
@@ -129,11 +143,11 @@ func LoadConfig() (*Config, error) {
 			PubChannel: telegramPub,
 		},
 		Privy: PrivyConfig{
-			VerificationKey: privyKey,
-			AppId:           privyAppID,
-			Wallet:          privyWallet,
+			AppId: privyAppID,
 		},
 		Solana: SolanaConfig{
+			SecretKey:             secretKey,
+			PoolKey:               poolKey,
 			ProgramId:             solanaProgramId,
 			CardCollectionPubKey:  cardCollectionPubKey,
 			StoneCollectionPubKey: stoneCollectionPubKey,
@@ -143,9 +157,10 @@ func LoadConfig() (*Config, error) {
 			PinataSecret: pinataSecret,
 			PinataToken:  pinataToken,
 		},
-		OpenAIToken: openAIToken,
-		Port:        port,
-		Environment: environment,
+		OpenAIToken:      openAIToken,
+		StripePrivateKey: stripePrivateKey,
+		Port:             port,
+		Environment:      environment,
 	}
 
 	return cfg, nil

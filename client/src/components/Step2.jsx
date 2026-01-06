@@ -1,6 +1,6 @@
 import { useState } from "react";
-import posterImg from "../assets/poster.png";
-import designatorImg from "../assets/designator.png";
+import posterImg from "@images/poster.png";
+import designatorImg from "@images/designator.png";
 
 export default function Step2({ next, setBiome }) {
     const [selectedBiome, setSelectedBiome] = useState(null);

@@ -77,3 +77,52 @@ func (rw *Responder) SendForbidden(msg ...string) {
 func (rw *Responder) SendNotFound(msg ...string) {
 	rw.sendError(http.StatusNotFound, msg...)
 }
+
+func (rw *Responder) InitSSE() {
+	h := rw.Header()
+
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Connection", "keep-alive")
+	h.Set("X-Accel-Buffering", "no")
+
+	rw.WriteHeader(http.StatusOK)
+
+	if _, ok := rw.ResponseWriter.(http.Flusher); !ok {
+		LogError("Responder", "response writer does not support flushing", nil)
+	}
+}
+
+func (rw *Responder) SendSSE(event string, data any) error {
+	var payload []byte
+
+	switch v := data.(type) {
+	case []byte:
+		payload = v
+	default:
+		var err error
+		payload, err = json.Marshal(v)
+		if err != nil {
+			return err
+		}
+	}
+
+	if event != "" {
+		if _, err := rw.Write([]byte("event: " + event + "\n")); err != nil {
+			return err
+		}
+	}
+
+	if _, err := rw.Write([]byte("data: ")); err != nil {
+		return err
+	}
+	if _, err := rw.Write(payload); err != nil {
+		return err
+	}
+	if _, err := rw.Write([]byte("\n\n")); err != nil {
+		return err
+	}
+
+	rw.Flush()
+	return nil
+}
