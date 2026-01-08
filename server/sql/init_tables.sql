@@ -125,3 +125,37 @@ create table if not exists solana_meta (
   last_signature varchar(88) not null,
   updated timestamptz default now()
 );
+
+create table if not exists orders (
+    id uuid primary key,
+    user_id text not null references users(privy_id) on delete cascade,
+    product text not null,
+    price int not null,
+    status text not null check (status IN (
+        'created',
+        'paid',
+        'fulfilled',
+        'failed'
+    )),
+    stripe_intent_id text unique,
+    created timestamptz not null default now(),
+    paid timestamptz,
+    fulfilled timestamptz
+);
+
+create table if not exists purchases (
+    id serial primary key, 
+    user_id text references users(privy_id) on delete cascade,
+    order_id uuid references orders(id) on delete cascade,
+    product text not null check (product IN (
+        'pack10',
+        'pack25'
+    )),
+    status text not null check (status IN (
+        'sealed',
+        'opened'
+    )),
+    payload jsonb not null,
+    created timestamptz not null default now(),
+    opened timestamptz
+);

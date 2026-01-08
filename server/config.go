@@ -44,6 +44,7 @@ type Config struct {
 	Pinata           PinataConfig
 	OpenAIToken      string
 	StripePrivateKey string
+	StripeSecret     string
 	Port             string
 	Environment      string
 }
@@ -94,6 +95,10 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	stripePrivateKey, err := requireEnv("STRIPE_PRIVATE_KEY")
+	if err != nil {
+		return nil, err
+	}
+	stripeSecret, err := requireEnv("STRIPE_SECRET")
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +164,7 @@ func LoadConfig() (*Config, error) {
 		},
 		OpenAIToken:      openAIToken,
 		StripePrivateKey: stripePrivateKey,
+		StripeSecret:     stripeSecret,
 		Port:             port,
 		Environment:      environment,
 	}

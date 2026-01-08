@@ -15,6 +15,14 @@ export default function Shop() {
     const [elements, setElements] = useState(null);
     const [payOpen, setPayOpen] = useState(false);
     const [paymentReady, setPaymentReady] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const sseRef = useRef(null);
+    const sseTimeoutRef = useRef(null);
+    const sseFinishedRef = useRef(false);
+    const [paymentSuccess, setPaymentSuccess] = useState(false);
+    const [paymentError, setPaymentError] = useState(false);
+    const [orderId, setOrderId] = useState(null);
 
     const paymentMounted = useRef(false);
 
@@ -51,11 +59,22 @@ export default function Shop() {
     const handleBuy = async () => {
         if (!stripe || !selectedProduct) return;
 
-        const { ClientSecret } = await api.createPayment({ productId: selectedProduct.id });
-        const els = stripe.elements({ clientSecret: ClientSecret });
-        setElements(els);
-        setPayOpen(true);
-        paymentMounted.current = false;
+        setLoading(true);
+        setError(null);
+
+        try {
+            setPayOpen(true);
+            const { ClientSecret, OrderId } = await api.createPayment({ productId: selectedProduct.Id });
+            setOrderId(OrderId);
+            const els = stripe.elements({ clientSecret: ClientSecret });
+            setElements(els);
+            paymentMounted.current = false;
+        } catch (e) {
+            console.error(e);
+            setError(e);
+        } finally {
+            setLoading(false);
+        }
     };
 
     useEffect(() => {
@@ -70,13 +89,55 @@ export default function Shop() {
     const confirmPay = async () => {
         if (!stripe || !elements) return;
 
-        await stripe.confirmPayment({
+        const result = await stripe.confirmPayment({
             elements,
+            redirect: "if_required",
             confirmParams: {
                 return_url: window.location.href,
             },
         });
+
+        if (result.error) {
+            setError(result.error.message);
+            setLoading(false);
+        } else {
+            console.log("Payment initiated, waiting for SSE...");
+        }
+
+        sseTimeoutRef.current = setTimeout(() => {
+            console.warn("⏰ Mint SSE timeout");
+            sseRef.current?.close();
+            sseRef.current = null;
+        }, 60000);
+
+        sseRef.current = api.subscribeSSE(orderId, {
+            onEvent: (event, data) => {
+                if (event === "confirmed") {
+                    setPaymentSuccess(true);
+                    cleanupMint();
+                    console.log("🎉 Mint successful!", data);
+                }
+
+                if (event === "failed") {
+                    setPaymentError(true);
+                    cleanupMint();
+                    console.error("❌ Mint failed", data);
+                }
+            },
+
+            onError: () => {
+                console.warn("⚠️ SSE temporarily disconnected, retrying...");
+            },
+        });
     };
+
+    function cleanupMint() {
+        clearTimeout(sseTimeoutRef.current);
+        sseTimeoutRef.current = null;
+        sseRef.current?.close();
+        sseRef.current = null;
+        sseFinishedRef.current = true;
+    }
 
     return (
         <div className="flex-grow flex flex-col items-center text-white py-2 relative">
@@ -98,7 +159,7 @@ export default function Shop() {
                         <div key={Id} className="w-full flex-shrink-0 flex flex-col items-center gap-2">
                             <img src={PRODUCTS[Id]} alt="" />
                             <span className="text-black text-lg font-bold">{Id}</span>
-                            <span className="text-black text-lg font-bold">${Price}</span>
+                            <span className="text-black text-lg font-bold">${(Price / 100).toFixed(2)}</span>
                         </div>
                     ))}
                 </div>
@@ -126,23 +187,77 @@ export default function Shop() {
 
             {/* MODAL */}
             {payOpen && selectedProduct && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-                    <div className="bg-white rounded-lg p-4 w-[360px] relative">
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl p-6 w-[380px] relative shadow-2xl overflow-hidden">
                         <button
-                            onClick={() => setPayOpen(false)}
-                            className="absolute top-2 right-2 text-black/50 hover:text-black"
+                            onClick={() => {
+                                setPayOpen(false);
+                                setPaymentSuccess(false);
+                                setPaymentError(false);
+                            }}
+                            className="absolute top-4 right-4 text-black/30 hover:text-black z-10"
                         >
                             ✕
                         </button>
-                        <h3 className="text-black font-bold mb-3">Buy {selectedProduct.Id}</h3>
-                        <div id="stripe-payment" />
-                        <button
-                            onClick={confirmPay}
-                            disabled={!paymentReady}
-                            className="mt-4 w-full bg-black text-white py-2 rounded"
-                        >
-                            Pay ${selectedProduct.price}
-                        </button>
+                        {paymentSuccess ? (
+                            <div className="py-8 flex flex-col items-center text-center animate-in fade-in zoom-in duration-300">
+                                <div className="text-6xl mb-4">🎉</div>
+                                <h3 className="text-black text-2xl font-black mb-2">YEAH!</h3>
+                                <p className="text-gray-600">
+                                    <b>{selectedProduct.Id}</b> has been delivered.
+                                </p>
+                                <button
+                                    onClick={() => setPayOpen(false)}
+                                    className="mt-6 w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors"
+                                >
+                                    Open!
+                                </button>
+                            </div>
+                        ) : paymentError ? (
+                            <div className="py-8 flex flex-col items-center text-center animate-in fade-in zoom-in duration-300">
+                                <div className="text-6xl mb-4">💀</div>
+                                <h3 className="text-red-500 text-2xl font-black mb-2">OH SHIT...</h3>
+                                <p className="text-gray-600">
+                                    Something went wrong with the payment. The bank says: "Not today, bro".
+                                </p>
+                                <button
+                                    onClick={() => setPaymentError(false)}
+                                    className="mt-6 w-full bg-black text-white font-bold py-3 rounded-xl"
+                                >
+                                    Try again
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="animate-in fade-in duration-300">
+                                <h3 className="text-black font-black text-xl mb-4 uppercase tracking-tight">
+                                    Payment for {selectedProduct.Id}
+                                </h3>
+
+                                <div id="stripe-payment" className="min-h-[250px]" />
+
+                                <button
+                                    onClick={confirmPay}
+                                    disabled={!paymentReady || loading}
+                                    className={`mt-6 w-full flex justify-center items-center gap-2 text-white font-bold py-4 rounded-xl shadow-lg transition-all ${
+                                        loading
+                                            ? "bg-gray-400"
+                                            : "bg-gradient-to-r from-blue-600 to-indigo-600 active:scale-95"
+                                    }`}
+                                >
+                                    {loading ? (
+                                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                    ) : (
+                                        `PAY ${(selectedProduct.Price / 100).toFixed(2)} USD`
+                                    )}
+                                </button>
+
+                                {error && (
+                                    <div className="mt-4 p-3 bg-red-50 text-red-500 rounded-lg text-sm text-center font-medium border border-red-100">
+                                        {error.message || error}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

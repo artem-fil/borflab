@@ -10,8 +10,9 @@ import Shop from "./screens/Shop";
 import Storage from "./screens/Storage";
 import Lab from "./screens/Lab";
 import Swapomat from "./screens/Swapomat";
+import Splash from "@components/Splash";
 import NavMenu from "@components/NavMenu";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 import api from "./api";
 import store from "./store";
@@ -21,6 +22,27 @@ export default function App() {
     const { identityToken } = useIdentityToken();
     const location = useLocation();
     const [syncing, setSyncing] = useState(false);
+    const [minTimeElapsed, setMinTimeElapsed] = useState(false);
+    const [isExiting, setIsExiting] = useState(false);
+    const [showSplash, setShowSplash] = useState(true);
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setMinTimeElapsed(true);
+        }, 3000);
+
+        return () => clearTimeout(timer);
+    }, []);
+
+    useEffect(() => {
+        if (ready && minTimeElapsed) {
+            setIsExiting(true);
+            const exitTimer = setTimeout(() => {
+                setShowSplash(false);
+            }, 300);
+            return () => clearTimeout(exitTimer);
+        }
+    }, [ready, minTimeElapsed]);
 
     const { login } = useLogin({
         onComplete: (user, isNewUser) => {
@@ -52,8 +74,15 @@ export default function App() {
 
     const bgClass = bgMap[location.pathname] ?? "bg-app";
 
-    if (!ready) {
-        return <div className="text-black text-center mt-10">Loading...</div>;
+    if (showSplash) {
+        return (
+            <div
+                className={`flex flex-col bg-cover bg-bottom bg-no-repeat relative w-screen h-screen overflow-hidden font-plex py-6 ${bgClass} 
+                transition-opacity duration-300 ease-in-out ${isExiting ? "opacity-0" : "opacity-100"}`}
+            >
+                <Splash />
+            </div>
+        );
     }
     if (!authenticated || !identityToken) {
         return (

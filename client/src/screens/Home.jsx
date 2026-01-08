@@ -1,36 +1,55 @@
 import { Link } from "react-router-dom";
 
-export default function Home() {
-    const menuItems = ["profile", "library", "lab", "shop", "storage", "swapomat"];
+import secretariatImg from "@images/secretariat.png";
+import labImg from "@images/lab.png";
+import swapImg from "@images/swap.png";
+import shopImg from "@images/shop.png";
+import libraryImg from "@images/library.png";
+import profileImg from "@images/profile.png";
+import storageImg from "@images/storage.png";
 
-    const icons = {
-        profile: "👤",
-        library: "📚",
-        lab: "🧪",
-        shop: "🛒",
-        storage: "📦",
-        swapomat: "🔄",
+export default function Home() {
+    const menuItems = {
+        profile: profileImg,
+        library: libraryImg,
+        lab: labImg,
+        shop: shopImg,
+        storage: storageImg,
+        swapomat: swapImg,
     };
 
     return (
-        <div className="flex flex-col items-center justify-start min-h-screen p-6 overflow-y-auto">
-            <h1 className="text-3xl font-bold mb-8 mt-4 text-white uppercase tracking-widest">Dashboard</h1>
+        <div className="flex-grow flex flex-col items-center justify-center overflow-hidden p-4">
+            <div
+                className="relative flex items-center justify-center max-h-full w-full"
+                style={{ aspectRatio: "0.55 / 1" }}
+            >
+                <div
+                    style={{
+                        top: "15%",
+                        width: "80%",
+                        height: "64%",
+                    }}
+                    className="px-2 absolute grid grid-cols-2 gap-4 z-10 max-h-full w-full "
+                >
+                    {Object.entries(menuItems).map(([item, icon]) => {
+                        return (
+                            <Link
+                                to={`/${item}`}
+                                className="border border-lime-500 rounded-xl p-2 flex items-center flex-col justify-between"
+                            >
+                                <img className="w-12" src={icon} alt={item} />
+                                <span className="text-xl text-lime-500">{item}</span>
+                            </Link>
+                        );
+                    })}
+                </div>
 
-            <div className="grid grid-cols-2 gap-4 w-full max-w-md">
-                {menuItems.map((item) => (
-                    <Link
-                        key={item}
-                        to={`/${item}`}
-                        className="flex flex-col items-center justify-center p-6 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl transition-all active:scale-95 hover:bg-white/20"
-                    >
-                        <span className="text-4xl mb-2">{icons[item] || "🌀"}</span>
-                        <span className="text-white font-medium uppercase text-sm tracking-wider">{item}</span>
-                    </Link>
-                ))}
-            </div>
-
-            <div className="mt-auto py-6">
-                <p className="text-white/50 text-xs italic">Select a module to continue</p>
+                <img
+                    className="absolute inset-0 w-full max-h-auto object-contain"
+                    src={secretariatImg}
+                    alt="swapomat"
+                />
             </div>
         </div>
     );

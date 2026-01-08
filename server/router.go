@@ -42,6 +42,9 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	// SSE
 	router.Handle("GET", "/sse/subscribe/:id", api.SubscribeSSE)
 
+	// stripe webhook
+	router.Handle("POST", "/api/stripe-webhook", api.StripeWebhook)
+
 	return router
 }
 

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"math/rand"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var seasonLimits = map[Rarity]int{
@@ -161,7 +163,30 @@ type Monster struct {
 
 type Product struct {
 	Id    string
-	Price float64
+	Price int64
+}
+
+type Order struct {
+	Id             uuid.UUID
+	UserId         string
+	Product        string
+	Price          int
+	StripeIntentId string
+	Status         string
+	Created        time.Time
+	Paid           *time.Time
+	Fulfilled      *time.Time
+}
+
+type Purchase struct {
+	Id      int
+	UserId  string
+	OrderId uuid.UUID
+	Product string
+	Status  string
+	Payload map[string]any
+	Created time.Time
+	Opened  *time.Time
 }
 
 func (stats *RarityStats) PickRarity(stone StoneType) Rarity {
@@ -239,6 +264,43 @@ func (stats *RarityStats) PickRarity(stone StoneType) Rarity {
 	}
 
 	return getAnyAvailableRarity(remaining)
+}
+
+func GeneratePackPayload(totalSparks int) map[string]int {
+
+	weights := []struct {
+		Type   StoneType
+		Weight int
+	}{
+		{StoneQuartz, 100},
+		{StoneAmazonite, 60},
+		{StoneAgate, 30},
+		{StoneRuby, 15},
+		{StoneSapphire, 8},
+		{StoneTopaz, 4},
+		{StoneJade, 1},
+	}
+
+	result := make(map[string]int)
+	totalWeight := 0
+	for _, w := range weights {
+		totalWeight += w.Weight
+	}
+
+	for i := 0; i < totalSparks; i++ {
+		rnd := rand.Intn(totalWeight)
+		currentSum := 0
+
+		for _, w := range weights {
+			currentSum += w.Weight
+			if rnd < currentSum {
+				result[string(w.Type)]++
+				break
+			}
+		}
+	}
+
+	return result
 }
 
 func getAnyAvailableRarity(remaining map[Rarity]int) Rarity {

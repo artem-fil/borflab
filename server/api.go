@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -24,6 +25,7 @@ import (
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/stripe/stripe-go/v81"
 	"github.com/stripe/stripe-go/v81/paymentintent"
+	"github.com/stripe/stripe-go/v81/webhook"
 )
 
 const (
@@ -61,6 +63,17 @@ type swapMonsterForm struct {
 
 type createPaymentForm struct {
 	ProductId string `json:"productId"`
+}
+
+var productsCatalog = map[string]Product{
+	"pack10": {
+		Id:    "pack10",
+		Price: 399,
+	},
+	"pack25": {
+		Id:    "pack25",
+		Price: 999,
+	},
 }
 
 func NewApi(cfg *Config, db *DB, telegram *Telegram, rpcClient *rpc.Client, sseAgent *SSEAgent) *api {
@@ -155,15 +168,9 @@ func (a *api) GetMonsters(w *Responder, r *http.Request) {
 
 func (a *api) GetProducts(w *Responder, r *http.Request) {
 
-	products := []Product{
-		{
-			Id:    "pack10",
-			Price: 3.99,
-		},
-		{
-			Id:    "pack25",
-			Price: 9.99,
-		},
+	products := make([]Product, 0, len(productsCatalog))
+	for _, p := range productsCatalog {
+		products = append(products, p)
 	}
 
 	response := struct {
@@ -177,22 +184,31 @@ func (a *api) GetProducts(w *Responder, r *http.Request) {
 
 func (a *api) CreatePayment(w *Responder, r *http.Request) {
 
+	claims, _ := Claims(r)
+
 	form := &createPaymentForm{}
 	if err := ParseBody(r, &form); err != nil {
 		a.BadRequestError(w, err)
 		return
 	}
 
-	stripe.Key = a.cfg.StripePrivateKey
+	product, ok := productsCatalog[form.ProductId]
+	if !ok {
+		a.BadRequestError(w, errors.New("unknown product"))
+		return
+	}
 
+	orderId := uuid.New()
+
+	stripe.Key = a.cfg.StripePrivateKey
 	params := &stripe.PaymentIntentParams{
-		Amount:   stripe.Int64(100),
+		Amount:   stripe.Int64(product.Price),
 		Currency: stripe.String(string(stripe.CurrencyUSD)),
 		AutomaticPaymentMethods: &stripe.PaymentIntentAutomaticPaymentMethodsParams{
 			Enabled: stripe.Bool(true),
 		},
 		Metadata: map[string]string{
-			"productId": form.ProductId,
+			"orderId": orderId.String(),
 		},
 	}
 
@@ -201,12 +217,111 @@ func (a *api) CreatePayment(w *Responder, r *http.Request) {
 		a.InternalError(w, err)
 		return
 	}
+	fmt.Println(claims.Id)
+	order := &Order{
+		Id:             orderId,
+		UserId:         claims.Id,
+		Product:        product.Id,
+		Price:          int(product.Price),
+		StripeIntentId: pi.ID,
+	}
+
+	err = a.db.InsertOrder(r.Context(), order)
+
+	if err != nil {
+		a.DbError(w, err)
+		return
+	}
+
 	response := struct {
+		OrderId      string
 		ClientSecret string
 	}{
+		OrderId:      orderId.String(),
 		ClientSecret: pi.ClientSecret,
 	}
+
 	w.Send(response)
+}
+
+func (a *api) StripeWebhook(w http.ResponseWriter, r *http.Request) {
+	const MaxBodyBytes = int64(65536)
+	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+
+	payload, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	sigHeader := r.Header.Get("Stripe-Signature")
+	event, err := webhook.ConstructEvent(payload, sigHeader, a.cfg.StripeSecret)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	switch event.Type {
+	case "payment_intent.succeeded":
+		var pi stripe.PaymentIntent
+		if err := json.Unmarshal(event.Data.Raw, &pi); err != nil {
+			LogError("API", "cannot unmarshall payment intent", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		orderId := pi.Metadata["orderId"]
+
+		order, err := a.db.UpdateOrder(r.Context(), orderId, "paid")
+		if err != nil {
+			LogError("API", "cannot update order", err)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		total := map[string]int{"pack10": 10, "pack25": 25}[order.Product]
+		payload := GeneratePackPayload(total)
+
+		purchase := &Purchase{
+			UserId:  order.UserId,
+			OrderId: uuid.MustParse(pi.Metadata["orderId"]),
+			Product: order.Product,
+			Payload: map[string]any{
+				"stones": payload,
+				"total":  total,
+			},
+		}
+
+		purchaseId, err := a.db.InsertPurchase(r.Context(), purchase)
+		if err != nil {
+			LogError("API", "cannot create purchase", err)
+			a.sseAgent.Emit(orderId, "failed", map[string]any{"error": "cannot finish purchase"})
+		}
+
+		a.sseAgent.Emit(orderId, "confirmed", map[string]any{"status": "paid", "purchaseId": purchaseId})
+
+	case "payment_intent.payment_failed":
+		var pi stripe.PaymentIntent
+		if err := json.Unmarshal(event.Data.Raw, &pi); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		orderId := pi.Metadata["orderId"]
+		errorMessage := "payment failed"
+		if pi.LastPaymentError != nil {
+			errorMessage = pi.LastPaymentError.Msg
+		}
+
+		_, err = a.db.UpdateOrder(r.Context(), orderId, "failed")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		a.sseAgent.Emit(orderId, "failed", map[string]any{"error": errorMessage})
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {

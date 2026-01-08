@@ -576,6 +576,76 @@ func (db *DB) RegisterNotificationIfNew(ctx context.Context, sig string, slot in
 	return rows > 0, nil
 }
 
+func (db *DB) InsertOrder(ctx context.Context, order *Order) error {
+
+	result, err := db.Conn.ExecContext(
+		ctx,
+		`
+insert into orders (id, user_id, product, price, status, stripe_intent_id)
+values ($1, $2, $3, $4, 'created', $5)`,
+		order.Id.String(),
+		order.UserId,
+		order.Product,
+		order.Price,
+		order.StripeIntentId,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows inserted")
+	}
+	return nil
+}
+
+func (db *DB) UpdateOrder(ctx context.Context, orderId string, status string) (*Order, error) {
+	var order Order
+
+	err := db.Conn.QueryRowContext(ctx, `
+        update orders
+        set status = $1
+        where id = $2 
+        returning id, user_id, product, price, status, created
+    `, status, orderId).Scan(
+		&order.Id,
+		&order.UserId,
+		&order.Product,
+		&order.Price,
+		&order.Status,
+		&order.Created,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &order, nil
+}
+
+func (db *DB) InsertPurchase(ctx context.Context, purchase *Purchase) (int, error) {
+	payloadJson, err := json.Marshal(purchase.Payload)
+	if err != nil {
+		return 0, fmt.Errorf("marshal payload: %w", err)
+	}
+
+	var Id int
+	err = db.Conn.QueryRowContext(
+		ctx,
+		`insert into purchases (user_id, order_id, product, status, payload)
+         values ($1, $2, $3, $4, $5)
+         returning id`,
+		purchase.UserId, purchase.OrderId, purchase.Product, "sealed", payloadJson,
+	).Scan(&Id)
+
+	return Id, err
+}
+
 func (db *DB) UpdateSolanaNotification(ctx context.Context, n *SolanaNotification) error {
 	eventsJson, err := json.Marshal(n.Events)
 	if err != nil {
