@@ -32,7 +32,7 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
             const formData = new FormData();
             formData.append("file", specimen, "specimen.jpg");
             formData.append("biome", biome);
-            formData.append("stone", stone.MintAddress);
+            formData.append("stone", stone.Type);
 
             const { Id } = await api.analyze(formData);
 

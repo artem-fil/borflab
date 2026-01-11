@@ -49,12 +49,12 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
         }
     }
 
-    const handleStoneSelect = async (stone) => {
-        if (stone.SparkCount > 0) {
-            setStone(stone);
+    const handleStoneSelect = async ({ Type, SparkCount }) => {
+        if (SparkCount > 0) {
+            setStone({ Type, SparkCount });
             setShowStoneDialog(false);
         }
-        await appendTypedLine(`${stone.Type} selected.`);
+        await appendTypedLine(`${Type} selected.`);
         if (preview) {
             await appendTypedLine("Ready for analysis.");
             await appendTypedLine("Status: waiting for approval…");
@@ -226,7 +226,7 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                             <div className="bg-gray-900 border border-lime-500 rounded-lg p-6 max-w-md w-full flex flex-col gap-5">
                                 <h3 className="text-lime-500 text-lg font-bold text-center">SELECT STONE</h3>
                                 <div className="grid grid-cols-4 gap-3">
-                                    {availableStones.map(({ Type, MintAddress, SparkCount }) => {
+                                    {Object.entries(availableStones).map(([Type, SparkCount]) => {
                                         const isDisabled = SparkCount <= 0;
                                         const formatted =
                                             SparkCount > 0 ? SparkCount.toString().padStart(2, "0") : "00";
@@ -234,9 +234,7 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                                         return (
                                             <button
                                                 key={Type}
-                                                onClick={() =>
-                                                    !isDisabled && handleStoneSelect({ Type, MintAddress, SparkCount })
-                                                }
+                                                onClick={() => !isDisabled && handleStoneSelect({ Type, SparkCount })}
                                                 disabled={isDisabled}
                                                 className={`flex flex-col items-center rounded-lg transition-colors ${
                                                     isDisabled

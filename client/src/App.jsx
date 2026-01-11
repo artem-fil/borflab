@@ -10,6 +10,8 @@ import Shop from "./screens/Shop";
 import Storage from "./screens/Storage";
 import Lab from "./screens/Lab";
 import Swapomat from "./screens/Swapomat";
+import Policy from "./screens/Policy";
+import Counter from "./screens/Counter";
 import Splash from "@components/Splash";
 import NavMenu from "@components/NavMenu";
 import { useState, useEffect } from "react";
@@ -118,6 +120,8 @@ export default function App() {
                 <Route path="/storage" element={<Storage />} />
                 <Route path="/shop" element={<Shop />} />
                 <Route path="/swapomat" element={<Swapomat />} />
+                <Route path="/counter" element={<Counter />} />
+                <Route path="/policy" element={<Policy />} />
                 <Route path="*" element={<Welcome />} />
             </Routes>
         </div>

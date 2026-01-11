@@ -83,16 +83,18 @@ type SolanaEvent struct {
 }
 
 var eventDiscriminators = map[[8]byte]string{
-	{246, 253, 98, 133, 133, 132, 214, 224}: "CardInstanceMinted",
-	{235, 37, 241, 232, 236, 3, 253, 195}:   "StoneInstanceMinted",
-	{132, 192, 109, 134, 147, 251, 93, 42}:  "SparkUsed",
-	{94, 87, 215, 142, 36, 14, 148, 19}:     "CardExchanged",
+	{246, 253, 98, 133, 133, 132, 214, 224}:  "CardInstanceMinted",
+	{132, 255, 152, 197, 240, 160, 251, 221}: "SparkCardInstanceMinted",
+	{235, 37, 241, 232, 236, 3, 253, 195}:    "StoneInstanceMinted",
+	{132, 192, 109, 134, 147, 251, 93, 42}:   "SparkUsed",
+	{94, 87, 215, 142, 36, 14, 148, 19}:      "CardExchanged",
 }
 
 var ixDiscriminators = map[string][]byte{
-	"StoneInstanceMinted": {3, 147, 97, 164, 139, 153, 105, 248},
-	"CardInstanceMinted":  {4, 182, 83, 217, 232, 35, 33, 64},
-	"CardExchanged":       {143, 210, 95, 198, 96, 127, 195, 247},
+	"StoneInstanceMinted":     {3, 147, 97, 164, 139, 153, 105, 248},
+	"SparkCardInstanceMinted": {155, 166, 147, 157, 177, 27, 102, 227},
+	"CardInstanceMinted":      {4, 182, 83, 217, 232, 35, 33, 64},
+	"CardExchanged":           {143, 210, 95, 198, 96, 127, 195, 247},
 }
 
 type SparkUsedPayload struct {
@@ -104,6 +106,15 @@ type CardInstancePayload struct {
 	Mint         string
 	Owner        string
 	StoneMint    string
+	SerialNumber uint32
+	CardState    string
+	UserId       int32
+	ExperimentId int32
+}
+
+type SparkCardInstancePayload struct {
+	Mint         string
+	Owner        string
 	SerialNumber uint32
 	CardState    string
 	UserId       int32
@@ -414,7 +425,6 @@ func (sa *SolanaAgent) processSingleSignature(ctx context.Context, sig string, s
 	if !isNew {
 		return nil
 	}
-
 	notification := SolanaNotification{
 		Stage:   SolanaStageDone,
 		Created: time.Now().UTC(),
@@ -429,9 +439,7 @@ func (sa *SolanaAgent) processSingleSignature(ctx context.Context, sig string, s
 		Commitment:                     rpc.CommitmentConfirmed,
 		MaxSupportedTransactionVersion: uint8ptr(0),
 	})
-
 	if err != nil {
-
 		notification.Stage = SolanaStageInternalError
 		sa.db.UpdateSolanaNotification(ctx, &notification)
 		return fmt.Errorf("rpc error for %s: %w", sig, err)
@@ -443,7 +451,6 @@ func (sa *SolanaAgent) processSingleSignature(ctx context.Context, sig string, s
 	} else {
 		programId := solana.MustPublicKeyFromBase58(sa.cfg.ProgramId)
 		sep := NewSolanaEventProcessor(programId, sa.rpcClient, sa.httpClient)
-
 		if err := sep.ExtractEvents(&notification); err != nil {
 			notification.Stage = SolanaStageEventError
 		} else {
@@ -573,8 +580,8 @@ func (sep *SolanaEventProcessor) ProcessEvents(ctx context.Context, notification
 				}
 				mintPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[0]]
 				ownerPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[1]]
-				stoneMintPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[5]]
-				cardStatePubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[9]]
+				stoneMintPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[6]]
+				cardStatePubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[10]]
 				metadataUri, err := sep.getCardMetadataUri(ctx, mintPubKey)
 				if err != nil || metadataUri == nil {
 					maybeError = err
@@ -635,6 +642,95 @@ func (sep *SolanaEventProcessor) ProcessEvents(ctx context.Context, notification
 				result.Mutator.AddMutation(&InsertMonsterMutation{Monster: monster})
 				result.Applicator.AddApplication(&MintMonsterApplication{Monster: monster})
 			}
+		case "SparkCardInstanceMinted":
+			{
+				payload, err := sep.extractSparkCardPayload(event.ProgramData)
+				if err != nil || payload == nil {
+					maybeError = fmt.Errorf("cannot extract payload for event %s: %v", eventType, err)
+					break
+				}
+				marshalled, err := json.Marshal(payload)
+				if err != nil {
+					maybeError = fmt.Errorf("cannot marshal payload for event %s: %v", eventType, err)
+					break
+				}
+				rawJson := json.RawMessage(marshalled)
+				event.Payload = &rawJson
+
+				discriminator, ok := ixDiscriminators[*event.Type]
+				if !ok {
+					maybeError = fmt.Errorf("cannot find ix discriminator for event %v", eventType)
+					break
+				}
+
+				cardMintIx, err := sep.findInstruction(txDecoded, discriminator, 13)
+				if err != nil {
+					maybeError = err
+					break
+				}
+				mintPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[0]]
+				ownerPubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[1]]
+				cardStatePubKey := txDecoded.Message.AccountKeys[cardMintIx.Accounts[7]]
+				metadataUri, err := sep.getCardMetadataUri(ctx, mintPubKey)
+				if err != nil || metadataUri == nil {
+					maybeError = err
+					break
+				}
+				metadataByte, err := sep.fetchIPFSMetadata(ctx, *metadataUri)
+				if err != nil {
+					maybeError = err
+					break
+				}
+				metadata, err := sep.parseCardMetadata(metadataByte)
+				if err != nil {
+					maybeError = err
+					break
+				}
+				biome, err := CheckBiome(metadata["biome"])
+				if err != nil || biome == nil {
+					maybeError = err
+					break
+				}
+				rarity, err := CheckRarity(metadata["rarity"])
+				if err != nil || rarity == nil {
+					maybeError = err
+					break
+				}
+				stone, err := CheckStone(metadata["stone"])
+				if err != nil || stone == nil {
+					maybeError = err
+					break
+				}
+				ownerPubKeyStr := ownerPubKey.String()
+				monster := &Monster{
+					ExperimentId:     int(payload.ExperimentId),
+					Signature:        signature,
+					Slot:             slot,
+					MintAddress:      mintPubKey.String(),
+					OwnerAddress:     &ownerPubKeyStr,
+					CardStateAddress: cardStatePubKey.String(),
+					Name:             metadata["name"],
+					Species:          metadata["species"],
+					Lore:             metadata["lore"],
+					MovementClass:    metadata["movement_class"],
+					Behaviour:        metadata["behaviour"],
+					Personality:      metadata["personality"],
+					Abilities:        metadata["abilities"],
+					Habitat:          metadata["habitat"],
+					Biome:            *biome,
+					Rarity:           *rarity,
+					Stone:            *stone,
+					SerialNumber:     int(payload.SerialNumber),
+					Generation:       1,
+					Status:           "active",
+					MetadataUri:      *metadataUri,
+					ImageCid:         metadata["image"],
+					Minted:           time.Unix(int64(*blocktime), 0).UTC(),
+				}
+				result.Mutator.AddMutation(&UseStoneSparkMutation{Monster: monster})
+				result.Mutator.AddMutation(&InsertMonsterMutation{Monster: monster})
+				result.Applicator.AddApplication(&MintMonsterApplication{Monster: monster})
+			}
 		case "StoneInstanceMinted":
 			{
 				payload, err := sep.extractStonePayload(event.ProgramData)
@@ -677,13 +773,18 @@ func (sep *SolanaEventProcessor) ProcessEvents(ctx context.Context, notification
 					maybeError = err
 					break
 				}
+				mpk := mintPubKey.String()
+				oa := ownerPubKey.String()
+				ssk := stoneStatePubKey.String()
+				minted := time.Now().UTC()
 				stone := &Stone{
-					MintAddress:  mintPubKey.String(),
-					OwnerAddress: ownerPubKey.String(),
-					PdaAddress:   stoneStatePubKey.String(),
-					Signature:    signature,
-					Slot:         slot,
-					Minted:       time.Now().UTC(),
+					Origin:       "crypto",
+					MintAddress:  &mpk,
+					OwnerAddress: &oa,
+					PdaAddress:   &ssk,
+					Signature:    &signature,
+					Slot:         &slot,
+					Minted:       &minted,
 					SparkCount:   int(sparksRemaining),
 					Type:         *stoneType,
 				}
@@ -840,6 +941,32 @@ func (sep *SolanaEventProcessor) extractCardPayload(programData []byte) (*CardIn
 		Mint:         base64.StdEncoding.EncodeToString(mintBytes),
 		Owner:        base64.StdEncoding.EncodeToString(ownerBytes),
 		StoneMint:    base64.StdEncoding.EncodeToString(stoneMintBytes),
+		SerialNumber: serialNumber,
+		CardState:    base64.StdEncoding.EncodeToString(cardStateBytes),
+		UserId:       int32(userId),
+		ExperimentId: int32(experimentId),
+	}
+	return &payload, nil
+}
+
+func (sep *SolanaEventProcessor) extractSparkCardPayload(programData []byte) (*SparkCardInstancePayload, error) {
+	r := NewReader(programData)
+
+	mintBytes := r.ReadBytes(32)
+	ownerBytes := r.ReadBytes(32)
+	serialNumber := r.ReadUint32()
+	cardStateBytes := r.ReadBytes(32)
+	userId := r.ReadUint32()
+	experimentId := r.ReadUint32()
+	r.EnsureEOF()
+
+	if r.err != nil {
+		return nil, fmt.Errorf("cannot extract CardInstancePayload: %v", r.err)
+	}
+
+	payload := SparkCardInstancePayload{
+		Mint:         base64.StdEncoding.EncodeToString(mintBytes),
+		Owner:        base64.StdEncoding.EncodeToString(ownerBytes),
 		SerialNumber: serialNumber,
 		CardState:    base64.StdEncoding.EncodeToString(cardStateBytes),
 		UserId:       int32(userId),
@@ -1293,7 +1420,7 @@ type MintStoneApplication struct {
 func (m *MintStoneApplication) Apply(ctx context.Context, telegram *Telegram, sseAgent *SSEAgent) error {
 
 	sseAgent.Emit(
-		m.Stone.Signature,
+		*m.Stone.Signature,
 		"confirmed",
 		m.Stone,
 	)
@@ -1313,6 +1440,14 @@ func (a *CardExchangeApplication) Apply(ctx context.Context, telegram *Telegram,
 		"true",
 	)
 	return nil
+}
+
+type UseStoneSparkMutation struct {
+	Monster *Monster
+}
+
+func (m *UseStoneSparkMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) error {
+	return db.DecreaseStoneSparksTx(ctx, tx, m.Monster)
 }
 
 type InsertMonsterMutation struct {

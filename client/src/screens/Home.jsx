@@ -7,6 +7,8 @@ import shopImg from "@images/shop.png";
 import libraryImg from "@images/library.png";
 import profileImg from "@images/profile.png";
 import storageImg from "@images/storage.png";
+import counterImg from "@images/counter.png";
+import policyImg from "@images/policy.png";
 
 export default function Home() {
     const menuItems = {
@@ -16,6 +18,8 @@ export default function Home() {
         shop: shopImg,
         storage: storageImg,
         swapomat: swapImg,
+        counter: counterImg,
+        policy: policyImg,
     };
 
     return (
@@ -35,11 +39,12 @@ export default function Home() {
                     {Object.entries(menuItems).map(([item, icon]) => {
                         return (
                             <Link
+                                key={item}
                                 to={`/${item}`}
-                                className="border border-lime-500 rounded-xl p-2 flex items-center flex-col justify-between"
+                                className="border border-lime-500 rounded-xl p-1 flex items-center flex-col justify-between"
                             >
-                                <img className="w-12" src={icon} alt={item} />
-                                <span className="text-xl text-lime-500">{item}</span>
+                                <img className="h-10" src={icon} alt={item} />
+                                <span className="text-lg text-lime-500">{item}</span>
                             </Link>
                         );
                     })}

@@ -7,6 +7,9 @@ import { PRODUCTS } from "../config";
 const publicKey =
     "pk_test_51QJAj6HH9n10mVPrjGiHWzHdk8Ya4yItMhxXC1i5S24k8bVDjBuGtQQnY9vWkWWo7bTlWeOiPqe0kpLiJZIQGZBA00dOKBGj51";
 
+import { STONES } from "../config.js";
+import { Link } from "react-router-dom";
+
 export default function Shop() {
     const [products, setProducts] = useState([]);
     const [index, setIndex] = useState(0);
@@ -23,6 +26,8 @@ export default function Shop() {
     const [paymentSuccess, setPaymentSuccess] = useState(false);
     const [paymentError, setPaymentError] = useState(false);
     const [orderId, setOrderId] = useState(null);
+    const [purchase, setPurchase] = useState(null);
+    const [stones, setStones] = useState(null);
 
     const paymentMounted = useRef(false);
 
@@ -113,15 +118,14 @@ export default function Shop() {
         sseRef.current = api.subscribeSSE(orderId, {
             onEvent: (event, data) => {
                 if (event === "confirmed") {
+                    setPurchase(data.purchase);
                     setPaymentSuccess(true);
-                    cleanupMint();
-                    console.log("🎉 Mint successful!", data);
+                    cleanupSubscribe();
                 }
 
                 if (event === "failed") {
                     setPaymentError(true);
-                    cleanupMint();
-                    console.error("❌ Mint failed", data);
+                    cleanupSubscribe();
                 }
             },
 
@@ -131,7 +135,20 @@ export default function Shop() {
         });
     };
 
-    function cleanupMint() {
+    const openPack = async (purchaseId) => {
+        try {
+            setLoading(true);
+            const { Purchase } = await api.openPurchase(purchaseId);
+            setStones(Purchase.Payload);
+        } catch (e) {
+            console.error(e);
+            setError(e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    function cleanupSubscribe() {
         clearTimeout(sseTimeoutRef.current);
         sseTimeoutRef.current = null;
         sseRef.current?.close();
@@ -169,7 +186,6 @@ export default function Shop() {
             <div className="py-2 flex flex-col items-center gap-2">
                 <div className="flex gap-4 text-lg items-center">
                     <button onClick={prev}>👈</button>
-
                     <div className="flex gap-1">
                         {products.map((_, i) => (
                             <div
@@ -178,7 +194,6 @@ export default function Shop() {
                             />
                         ))}
                     </div>
-
                     <button onClick={next}>👉</button>
                 </div>
 
@@ -188,7 +203,7 @@ export default function Shop() {
             {/* MODAL */}
             {payOpen && selectedProduct && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-                    <div className="bg-white rounded-2xl p-6 w-[380px] relative shadow-2xl overflow-hidden">
+                    <div className="bg-white rounded-2xl p-4 w-80 relative shadow-2xl overflow-hidden">
                         <button
                             onClick={() => {
                                 setPayOpen(false);
@@ -200,25 +215,56 @@ export default function Shop() {
                             ✕
                         </button>
                         {paymentSuccess ? (
-                            <div className="py-8 flex flex-col items-center text-center animate-in fade-in zoom-in duration-300">
-                                <div className="text-6xl mb-4">🎉</div>
-                                <h3 className="text-black text-2xl font-black mb-2">YEAH!</h3>
-                                <p className="text-gray-600">
-                                    <b>{selectedProduct.Id}</b> has been delivered.
+                            <div className="py-4 text-gray-800 flex flex-col gap-2 items-center text-center animate-in fade-in zoom-in duration-300">
+                                <div className="text-2xl mb-4">{stones ? "💎 YEAH!" : "🎉 YEAH!"}</div>
+                                <p className="">
+                                    <b>{purchase.Product}</b> has been delivered.
                                 </p>
-                                <button
-                                    onClick={() => setPayOpen(false)}
-                                    className="mt-6 w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors"
-                                >
-                                    Open!
-                                </button>
+                                {stones ? (
+                                    <div className="text-sm grid grid-cols-3">
+                                        {Object.entries(stones).map(([stone, amount]) => (
+                                            <div className="flex flex-col gap-2 items-center text-sm">
+                                                <img
+                                                    src={STONES[stone].image}
+                                                    alt={stone}
+                                                    className="h-1/2 object-cover"
+                                                />
+                                                <span>{`${stone}: ${amount}`}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <img
+                                        className={`h-32 ${
+                                            loading ? "animate-[pulse_0.8s_ease-in-out_infinite] scale-110" : ""
+                                        }`}
+                                        src={PRODUCTS[purchase.Product]}
+                                        alt=""
+                                    />
+                                )}
+                                {stones ? (
+                                    <Link
+                                        to={`/lab`}
+                                        className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors"
+                                    >
+                                        GO BORF
+                                    </Link>
+                                ) : (
+                                    <button
+                                        onClick={() => openPack(purchase.Id)}
+                                        disabled={loading}
+                                        className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors"
+                                    >
+                                        {loading ? "Wait..." : "Open!"}
+                                    </button>
+                                )}
                             </div>
                         ) : paymentError ? (
                             <div className="py-8 flex flex-col items-center text-center animate-in fade-in zoom-in duration-300">
                                 <div className="text-6xl mb-4">💀</div>
-                                <h3 className="text-red-500 text-2xl font-black mb-2">OH SHIT...</h3>
+                                <h3 className="text-red-500 text-2xl font-black mb-2">NO WAY...</h3>
                                 <p className="text-gray-600">
-                                    Something went wrong with the payment. The bank says: "Not today, bro".
+                                    Something went wrong with the payment. The bank says: "Not today".
                                 </p>
                                 <button
                                     onClick={() => setPaymentError(false)}

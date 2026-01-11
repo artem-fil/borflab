@@ -116,19 +116,26 @@ where wallet = $1
 	return &user, nil
 }
 
-func (db *DB) SelectStone(ctx context.Context, mintAddress string, userId string) (*Stone, error) {
+func (db *DB) SelectStone(ctx context.Context, stoneType string, userId string) (*Stone, error) {
 	var stone Stone
 	err := db.Conn.QueryRowContext(
 		ctx,
 		`
-select id, user_id, mint_address, owner_address, spark_count, type, pda_address, signature, slot, minted, created
-from stones where mint_address = $1 and user_id = $2
-	`,
-		mintAddress,
+        select 
+            id, user_id, origin, mint_address, owner_address, spark_count, 
+            type, pda_address, signature, slot, minted, created
+        from stones 
+        where user_id = $1 
+          and type = $2 
+          and spark_count > 0
+        limit 1
+        `,
 		userId,
+		stoneType,
 	).Scan(
 		&stone.Id,
 		&stone.UserId,
+		&stone.Origin,
 		&stone.MintAddress,
 		&stone.OwnerAddress,
 		&stone.SparkCount,
@@ -139,6 +146,7 @@ from stones where mint_address = $1 and user_id = $2
 		&stone.Minted,
 		&stone.Created,
 	)
+
 	if err != nil {
 		return nil, err
 	}
@@ -146,54 +154,159 @@ from stones where mint_address = $1 and user_id = $2
 	return &stone, nil
 }
 
-func (db *DB) SelectStoneStats(ctx context.Context, userId string) ([]StoneStats, error) {
+func (db *DB) SelectSuitableStone(ctx context.Context, stoneType string, userId string) (*Stone, error) {
+	var stone Stone
+	err := db.Conn.QueryRowContext(
+		ctx,
+		`
+        select 
+    id, 
+    user_id, 
+    origin, 
+    mint_address, 
+    owner_address, 
+    spark_count, 
+    type, 
+    pda_address, 
+    signature, 
+    slot, 
+    minted, 
+    created
+from stones
+where user_id = $1 
+  and type = $2 
+  and spark_count > 0
+order by 
+    (origin = 'fiat') desc, 
+    spark_count asc         
+limit 1;
+        `,
+		userId,
+		stoneType,
+	).Scan(
+		&stone.Id,
+		&stone.UserId,
+		&stone.Origin,
+		&stone.MintAddress,
+		&stone.OwnerAddress,
+		&stone.SparkCount,
+		&stone.Type,
+		&stone.PdaAddress,
+		&stone.Signature,
+		&stone.Slot,
+		&stone.Minted,
+		&stone.Created,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &stone, nil
+}
+
+func (db *DB) SelectMonsterStats(ctx context.Context) (*MonsterStats, error) {
+
+	var (
+		byBiomeRaw  []byte
+		byStoneRaw  []byte
+		byRarityRaw []byte
+	)
+
+	err := db.Conn.QueryRowContext(ctx, `
+with
+biome_stats as (
+    select
+        b.biome::text as key,
+        coalesce(count(m.id), 0)::int as value
+    from unnest(enum_range(null::biome)) as b(biome)
+    left join monsters m
+        on m.biome = b.biome
+    group by b.biome
+),
+stone_stats as (
+    select
+        s.stone::text as key,
+        coalesce(count(m.id), 0)::int as value
+    from unnest(enum_range(null::stone)) as s(stone)
+    left join monsters m
+        on m.stone = s.stone
+    group by s.stone
+),
+rarity_stats as (
+    select
+        r.rarity::text as key,
+        coalesce(count(m.id), 0)::int as value
+    from unnest(enum_range(null::rarity)) as r(rarity)
+    left join monsters m
+        on m.rarity = r.rarity
+    group by r.rarity
+)
+select
+    (select jsonb_object_agg(key, value) from biome_stats)  as by_biome,
+    (select jsonb_object_agg(key, value) from stone_stats)  as by_stone,
+    (select jsonb_object_agg(key, value) from rarity_stats) as by_rarity;
+    `).Scan(
+		&byBiomeRaw,
+		&byStoneRaw,
+		&byRarityRaw,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	stats := MonsterStats{
+		ByBiome:  make(map[string]int),
+		ByStone:  make(map[string]int),
+		ByRarity: make(map[string]int),
+	}
+
+	if err := json.Unmarshal(byBiomeRaw, &stats.ByBiome); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(byStoneRaw, &stats.ByStone); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(byRarityRaw, &stats.ByRarity); err != nil {
+		return nil, err
+	}
+
+	return &stats, nil
+}
+
+func (db *DB) SelectStoneStats(ctx context.Context, userId string) (map[string]int, error) {
 	rows, err := db.Conn.QueryContext(
 		ctx,
 		`
-select
-    t.type,
-    coalesce(sum(s.spark_count) filter (where s.spark_count > 0), 0) as spark_count,
-    min_stone.mint_address
-from unnest(enum_range(null::stone)) as t(type)
-left join stones s
-    on s.user_id = $1
-   and s.type = t.type
-left join lateral (
-    select mint_address
-    from stones
-    where user_id = $1
-      and type = t.type
-      and spark_count > 0
-    order by spark_count
-    limit 1
-) min_stone on true
-group by
-    t.type,
-    min_stone.mint_address;`,
+        select
+            t.type,
+            coalesce(sum(s.spark_count), 0)::int
+        from unnest(enum_range(null::stone)) as t(type)
+        left join stones s
+            on s.user_id = $1
+           and s.type = t.type
+        group by t.type;`,
 		userId,
 	)
 
 	if err != nil {
 		return nil, err
-
 	}
 	defer rows.Close()
-	var stoneStats []StoneStats
+
+	stats := make(map[string]int)
 
 	for rows.Next() {
-		var stoneStat StoneStats
-		err := rows.Scan(
-			&stoneStat.Type,
-			&stoneStat.SparkCount,
-			&stoneStat.MintAddress,
-		)
-		if err != nil {
+		var stoneType string
+		var sparkCount int
+		if err := rows.Scan(&stoneType, &sparkCount); err != nil {
 			return nil, err
 		}
-		stoneStats = append(stoneStats, stoneStat)
+		stats[stoneType] = sparkCount
 	}
 
-	return stoneStats, nil
+	return stats, nil
 }
 
 func (db *DB) SelectMonsters(ctx context.Context, userId string, limit int, offset int, sort string, order string) ([]Monster, int, error) {
@@ -549,17 +662,17 @@ func (db *DB) RegisterNotificationIfNew(ctx context.Context, sig string, slot in
 	res, err := db.Conn.ExecContext(
 		ctx,
 		`
-        INSERT INTO solana_notifications (signature, slot, stage, created)
-        VALUES ($1, $2, 'processing', now())
-        ON CONFLICT (signature) DO UPDATE 
-        SET 
+        insert into solana_notifications (signature, slot, stage, created)
+        values ($1, $2, 'processing', now())
+        on conflict (signature) do update
+        set
             stage = 'processing', 
             created = now()
-        WHERE 
-            solana_notifications.stage IN ('internal_error', 'event_error', 'business_error')
-            OR 
-            (solana_notifications.stage = 'processing' AND solana_notifications.created < NOW() - INTERVAL '5 minutes')
-        RETURNING id;
+        where
+            solana_notifications.stage in ('internal_error', 'event_error', 'business_error')
+            or 
+            (solana_notifications.stage = 'processing' and solana_notifications.created < now() - interval '5 minutes')
+        returning id;
         `,
 		sig,
 		slot,
@@ -628,22 +741,73 @@ func (db *DB) UpdateOrder(ctx context.Context, orderId string, status string) (*
 	return &order, nil
 }
 
-func (db *DB) InsertPurchase(ctx context.Context, purchase *Purchase) (int, error) {
+func (db *DB) InsertPurchase(ctx context.Context, purchase *Purchase) (*Purchase, error) {
 	payloadJson, err := json.Marshal(purchase.Payload)
 	if err != nil {
-		return 0, fmt.Errorf("marshal payload: %w", err)
+		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
 
-	var Id int
+	var inserted Purchase
 	err = db.Conn.QueryRowContext(
 		ctx,
 		`insert into purchases (user_id, order_id, product, status, payload)
          values ($1, $2, $3, $4, $5)
-         returning id`,
+         returning id, user_id, order_id, product, status, payload, created, opened`,
 		purchase.UserId, purchase.OrderId, purchase.Product, "sealed", payloadJson,
-	).Scan(&Id)
+	).Scan(
+		&inserted.Id,
+		&inserted.UserId,
+		&inserted.OrderId,
+		&inserted.Product,
+		&inserted.Status,
+		&inserted.Payload,
+		&inserted.Created,
+		&inserted.Opened,
+	)
 
-	return Id, err
+	return &inserted, err
+}
+
+func (db *DB) OpenPurchase(ctx context.Context, Id int, userId string) (Purchase, error) {
+
+	var purchase Purchase
+	err := db.Conn.QueryRowContext(
+		ctx,
+		`
+with updated_purchase as (
+    update purchases
+    set 
+        status = 'opened', 
+        opened = now()
+    where id = $1 
+      and user_id = $2 
+      and status = 'sealed'
+    returning id, user_id, order_id, product, status, payload, created, opened
+),
+inserted_stones as (
+    insert into stones (user_id, type, spark_count, origin)
+    select 
+        p.user_id, 
+        kv.key::stone,
+        kv.value::smallint,
+        'fiat'
+    from updated_purchase p, 
+    jsonb_each_text(p.payload) as kv
+)
+select * from updated_purchase;`,
+		Id, userId,
+	).Scan(
+		&purchase.Id,
+		&purchase.UserId,
+		&purchase.OrderId,
+		&purchase.Product,
+		&purchase.Status,
+		&purchase.Payload,
+		&purchase.Created,
+		&purchase.Opened,
+	)
+
+	return purchase, err
 }
 
 func (db *DB) UpdateSolanaNotification(ctx context.Context, n *SolanaNotification) error {
@@ -676,11 +840,12 @@ func (db *DB) InsertStoneTx(ctx context.Context, tx *sql.Tx, stone *Stone) error
 		ctx,
 		`
 		insert into stones (
-			user_id, mint_address, owner_address, spark_count, type, pda_address, signature, slot, minted
+			user_id, origin, mint_address, owner_address, spark_count, type, pda_address, signature, slot, minted
 		) values ((select privy_id from users where $1 = any(wallets)), $2, $3, $4, $5, $6, $7, $8, $9)
 		on conflict (signature) do nothing
 		`,
 		stone.OwnerAddress,
+		stone.Origin,
 		stone.MintAddress,
 		stone.OwnerAddress,
 		stone.SparkCount,
@@ -705,12 +870,45 @@ func (db *DB) InsertStoneTx(ctx context.Context, tx *sql.Tx, stone *Stone) error
 	return err
 }
 
+func (db *DB) DecreaseStoneSparksTx(ctx context.Context, tx *sql.Tx, monster *Monster) error {
+	result, err := tx.ExecContext(
+		ctx,
+		`
+		update stones
+set spark_count = spark_count - 1
+where id = (
+    select id
+    from stones
+    where user_id in (select privy_id from users where $1 = any(wallets))
+      and type = $2
+      and origin = 'fiat'
+      and spark_count > 0
+    order by spark_count asc
+    limit 1
+	for update skip locked);`,
+		monster.OwnerAddress,
+		string(monster.Stone),
+	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("no stone updated for minted monster: %+v", monster)
+	}
+	return err
+}
+
 func (db *DB) UpdateStoneTx(ctx context.Context, tx *sql.Tx, stoneAddress string, sparkCount int) error {
 
 	result, err := tx.ExecContext(
 		ctx,
 		`
-		update stones set spark_count = $1 where mint_address = $2
+		update stones set spark_count = $1 where mint_address = $2 and origin = 'crypto'
 		`,
 		sparkCount,
 		stoneAddress,

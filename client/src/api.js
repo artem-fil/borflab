@@ -140,6 +140,16 @@ export default {
         return request(`/api/products/`);
     },
 
+    async getCounter() {
+        return request(`/api/counter/`);
+    },
+
+    async openPurchase(purchaseId) {
+        return request(`/api/purchases/${purchaseId}`, {
+            method: "PUT",
+        });
+    },
+
     subscribeSSE(key, { onEvent, onError } = {}) {
         const url = new URL(`${BASE_URL}/sse/subscribe/${key}`);
         const es = new EventSource(url.toString());

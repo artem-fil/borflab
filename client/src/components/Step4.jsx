@@ -20,6 +20,7 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
     const [preparing, setIsPreparing] = useState(false);
     const [minting, setIsMinting] = useState(false);
     const [mintSuccess, setMintSuccess] = useState(false);
+    const [activeWallet, setActiveWallet] = useState(null);
     const [mintError, setMintError] = useState(false);
     const frontCardRef = useRef(null);
     const backCardRef = useRef(null);
@@ -33,6 +34,15 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
 
     const audioRef = useRef(new Audio(printerSound));
     audioRef.current.volume = 0.5;
+
+    useEffect(() => {
+        if (!wallets || wallets.length === 0) return;
+
+        const storedWallet = localStorage.getItem("primaryWallet");
+        const wallet = wallets.find((w) => w.address === storedWallet) || wallets[0];
+
+        setActiveWallet(wallet);
+    }, [wallets]);
 
     useEffect(() => {
         if (!nextTask) return;
@@ -135,7 +145,7 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
 
             const { TxBase64 } = await api.prepareMonsterMint(experimentId, {
                 userPubKey: solanaWallet.address,
-                stonePubKey: stone.MintAddress,
+                stone: stone.Type,
             });
 
             const txBytes = Uint8Array.from(atob(TxBase64), (c) => c.charCodeAt(0));
@@ -193,6 +203,9 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
 
     if (!biome) {
         return;
+    }
+    if (!activeWallet) {
+        return <span>Loading wallets…</span>;
     }
     const { bg, text, border } = BIOMES[biome];
 

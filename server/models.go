@@ -106,14 +106,15 @@ type Experiment struct {
 type Stone struct {
 	Id           int
 	UserId       string
-	MintAddress  string
-	OwnerAddress string
+	Origin       string
+	MintAddress  *string
+	OwnerAddress *string
 	SparkCount   int
 	Type         StoneType
-	PdaAddress   string
-	Signature    string
-	Slot         int64
-	Minted       time.Time
+	PdaAddress   *string
+	Signature    *string
+	Slot         *int64
+	Minted       *time.Time
 	Created      time.Time
 }
 
@@ -121,6 +122,12 @@ type StoneStats struct {
 	MintAddress *string
 	Type        StoneType
 	SparkCount  int
+}
+
+type MonsterStats struct {
+	ByBiome  map[string]int
+	ByStone  map[string]int
+	ByRarity map[string]int
 }
 
 type Monster struct {
@@ -184,7 +191,7 @@ type Purchase struct {
 	OrderId uuid.UUID
 	Product string
 	Status  string
-	Payload map[string]any
+	Payload json.RawMessage
 	Created time.Time
 	Opened  *time.Time
 }
@@ -287,7 +294,7 @@ func GeneratePackPayload(totalSparks int) map[string]int {
 		totalWeight += w.Weight
 	}
 
-	for i := 0; i < totalSparks; i++ {
+	for range totalSparks {
 		rnd := rand.Intn(totalWeight)
 		currentSum := 0
 
