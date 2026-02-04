@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import posterImg from "@images/poster.png";
+import posterImg from "@images/poster01.png";
 import igniterImg from "@images/igniter.png";
 import placeholderImg from "@images/placeholder.svg";
 import api from "../api";
 
-import { STONES } from "../config.js";
+import { STONES, PRODUCTS } from "../config.js";
 
 export default function Step1({ next, setSpecimen, stone, setStone }) {
     const fileInputRef = useRef(null);
@@ -14,7 +14,9 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
     const [preview, setPreview] = useState(null);
     const [displayed, setDisplayed] = useState("");
     const [showStoneDialog, setShowStoneDialog] = useState(false);
-    const [availableStones, setAvailableStones] = useState([]);
+    const [isOpening, setIsOpening] = useState(false);
+    const [availableStones, setAvailableStones] = useState(null);
+    const [purchases, setAvailablePurchases] = useState([]);
     const [loading, setLoading] = useState(true);
 
     async function appendTypedLine(line = "") {
@@ -38,12 +40,14 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
     async function loadStonesData() {
         setLoading(true);
         try {
-            const stones = await api.getStones();
+            const { Stones, Purchases } = await api.getStones();
 
-            setAvailableStones(stones);
+            setAvailableStones(Stones);
+            setAvailablePurchases(Purchases);
         } catch (error) {
             console.error("Error loading stones data:", error);
-            setAvailableStones({});
+            setAvailableStones(null);
+            setAvailablePurchases([]);
         } finally {
             setLoading(false);
         }
@@ -58,6 +62,18 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
         if (preview) {
             await appendTypedLine("Ready for analysis.");
             await appendTypedLine("Status: waiting for approval…");
+        }
+    };
+
+    const openPack = async (purchaseId) => {
+        try {
+            setIsOpening(true);
+            const { Purchase } = await api.openPurchase(purchaseId);
+            loadStonesData();
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setIsOpening(false);
         }
     };
 
@@ -226,7 +242,7 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                             <div className="bg-gray-900 border border-lime-500 rounded-lg p-6 max-w-md w-full flex flex-col gap-5">
                                 <h3 className="text-lime-500 text-lg font-bold text-center">SELECT STONE</h3>
                                 <div className="grid grid-cols-4 gap-3">
-                                    {Object.entries(availableStones).map(([Type, SparkCount]) => {
+                                    {Object.entries(availableStones || []).map(([Type, SparkCount]) => {
                                         const isDisabled = SparkCount <= 0;
                                         const formatted =
                                             SparkCount > 0 ? SparkCount.toString().padStart(2, "0") : "00";
@@ -259,6 +275,32 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
                                                 >
                                                     {formatted}
                                                 </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <hr className="w-full border-none h-0.5 bg-lime-500" />
+                                <div className="grid grid-cols-4 gap-3">
+                                    {purchases?.map(({ Id, Product }) => {
+                                        return (
+                                            <button
+                                                key={Id}
+                                                onClick={() => !isOpening && openPack(Id)}
+                                                disabled={isOpening}
+                                                className={`flex flex-col items-center rounded-lg transition-colors ${
+                                                    isOpening
+                                                        ? "opacity-50 cursor-not-allowed grayscale"
+                                                        : "hover:border-lime-500"
+                                                }`}
+                                            >
+                                                <div
+                                                    className={`w-14 h-14 rounded-full mb-2 flex items-center justify-center ${
+                                                        isOpening ? "bg-gray-800" : "bg-gray-700"
+                                                    }`}
+                                                >
+                                                    <img src={PRODUCTS[Product]} alt="" />
+                                                </div>
+                                                <span className={`text-xs `}>{Id}</span>
                                             </button>
                                         );
                                     })}

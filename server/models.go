@@ -186,14 +186,15 @@ type Order struct {
 }
 
 type Purchase struct {
-	Id      int
-	UserId  string
-	OrderId uuid.UUID
-	Product string
-	Status  string
-	Payload json.RawMessage
-	Created time.Time
-	Opened  *time.Time
+	Id       int
+	UserId   string
+	OrderId  *uuid.UUID
+	Product  string
+	Status   string
+	Provider string
+	Payload  json.RawMessage `json:"-"`
+	Created  time.Time
+	Opened   *time.Time
 }
 
 func (stats *RarityStats) PickRarity(stone StoneType) Rarity {

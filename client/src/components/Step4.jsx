@@ -1,23 +1,19 @@
-import { Connection, Transaction } from "@solana/web3.js";
-
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import posterImg from "@images/poster.png";
+import poster4Img from "@images/poster04.png";
 import printerImg from "@images/printer.png";
 import cardbackImg from "@images/card-back.png";
 import cardfrontImg from "@images/card-front.png";
 import printerSound from "@sounds/printer.ogg";
 import api from "../api";
 import { Link } from "react-router-dom";
-import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
+import { useWallets } from "@privy-io/react-auth/solana";
 
-import { ENDPOINT, STONES, BIOMES } from "../config.js";
+import { STONES, BIOMES } from "../config.js";
 
 export default function Step4({ specimen, stone, biome, analyzeResult, nextTask }) {
     const { wallets } = useWallets();
-    const { signTransaction } = useSignTransaction();
     const [done, setDone] = useState(false);
-    const [preparing, setIsPreparing] = useState(false);
     const [minting, setIsMinting] = useState(false);
     const [mintSuccess, setMintSuccess] = useState(false);
     const [activeWallet, setActiveWallet] = useState(null);
@@ -136,36 +132,12 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
     }, [specimen]);
 
     async function handleMintClick(experimentId) {
-        if (minting || preparing) return;
+        if (minting) return;
 
         try {
-            setIsPreparing(true);
+            setIsMinting(true);
             const storedWallet = localStorage.getItem("primaryWallet");
             const solanaWallet = wallets.find((w) => w.address === storedWallet) || wallets[0];
-
-            const { TxBase64 } = await api.prepareMonsterMint(experimentId, {
-                userPubKey: solanaWallet.address,
-                stone: stone.Type,
-            });
-
-            const txBytes = Uint8Array.from(atob(TxBase64), (c) => c.charCodeAt(0));
-            const transaction = Transaction.from(txBytes);
-
-            const serializedTx = transaction.serialize({
-                requireAllSignatures: false,
-                verifySignatures: false,
-            });
-            setIsPreparing(false);
-            const { signedTransaction } = await signTransaction({
-                wallet: solanaWallet,
-                transaction: new Uint8Array(serializedTx),
-                chain: "solana:devnet",
-            });
-
-            const connection = new Connection(ENDPOINT, "confirmed");
-            const txid = await connection.sendRawTransaction(signedTransaction);
-
-            setIsMinting(true);
 
             mintTimeoutRef.current = setTimeout(() => {
                 console.warn("⏰ Mint SSE timeout");
@@ -173,7 +145,7 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                 mintSSERef.current = null;
             }, 60000);
 
-            mintSSERef.current = api.subscribeSSE(txid, {
+            mintSSERef.current = api.subscribeSSE(solanaWallet.address, {
                 onEvent: (event, data) => {
                     if (event === "confirmed") {
                         setMintSuccess(true);
@@ -187,7 +159,18 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                         console.error("❌ Mint failed", data);
                     }
                 },
+
+                onError: () => {
+                    console.warn("⚠️ SSE temporarily disconnected, retrying...");
+                },
             });
+
+            const { Signature } = await api.prepareMonsterMint(experimentId, {
+                userPubKey: solanaWallet.address,
+                stone: stone.Type,
+            });
+
+            setIsMinting(false);
         } catch (err) {
             console.error("❌ Transaction failed:", err);
         }
@@ -212,14 +195,14 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
     return (
         <div className="flex flex-col h-full justify-end">
             <div className="flex-1 flex items-center justify-center overflow-hidden">
-                <img src={posterImg} alt="poster" className="max-h-full max-w-full object-contain" />
+                <img src={poster4Img} alt="poster" className="max-h-full max-w-full object-contain" />
             </div>
 
             <div className="relative w-full">
                 {/* printer tray */}
                 <div
                     className="absolute z-10 overflow-hidden"
-                    style={{ bottom: "25%", left: "15%", width: "62%", aspectRatio: "0.62/1" }}
+                    style={{ bottom: "30%", left: "15%", width: "62%", aspectRatio: "0.62/1" }}
                 >
                     {/* back card */}
                     <div
@@ -321,13 +304,27 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                                     borflab // <strong>top secret</strong> // specimen
                                 </p>
                                 <hr className={`border-0 h-0.5 ${bg}`} />
-                                <div className="flex-grow flex overflow-hidden p-1">
+                                <div className="flex-grow flex overflow-visible p-1 relative group">
+                                    <div className="absolute -top-4 -right-2 z-10 animate-bounce">
+                                        <div className="relative bg-white border-2 border-black px-2 py-1 rounded-lg shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                                            <span className="font-black text-[10px] text-black uppercase whitespace-nowrap">
+                                                Pet me right now!
+                                            </span>
+                                            <div className="absolute -bottom-2 left-4 w-3 h-3 bg-white border-b-2 border-r-2 border-black rotate-45"></div>
+                                        </div>
+                                    </div>
                                     <img
                                         ref={outputImageRef}
-                                        className="mr-auto ml-auto h-full object-cover"
+                                        className="mr-auto ml-auto h-full object-cover cursor-pointer hover:scale-105 transition-transform"
                                         alt="output"
+                                        style={{
+                                            animation: "shake 3s cubic-bezier(.36,.07,.19,.97) infinite",
+                                            transform: "translate3d(0, 0, 0)",
+                                            backfaceVisibility: "hidden",
+                                        }}
                                     />
                                 </div>
+
                                 <hr className={`border-0 h-0.5 ${bg}`} />
                                 <div className="flex justify-between p-0.5">
                                     <div className="flex flex-col justify-between">
@@ -353,6 +350,18 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                                 </p>
                             </div>
                         </div>
+
+                        {/* Определение анимации shake в inline style, чтобы не лезть в CSS файлы */}
+                        <style>{`
+        @keyframes shake {
+            0%, 70%, 100% { transform: translate(0, 0) rotate(0); }
+            75% { transform: translate(-1px, 1px) rotate(-1deg); }
+            80% { transform: translate(-2px, -1px) rotate(1deg); }
+            85% { transform: translate(2px, 1px) rotate(-1deg); }
+            90% { transform: translate(1px, -1px) rotate(1deg); }
+            95% { transform: translate(-1px, 2px) rotate(0); }
+        }
+    `}</style>
                     </div>
                 </div>
 
@@ -368,27 +377,6 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                 />
                 <img src={printerImg} alt="igniter" className="w-full h-auto object-contain" />
             </div>
-            {preparing &&
-                createPortal(
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-                        <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
-                            <svg
-                                className="animate-spin h-10 w-10 mb-4 text-white"
-                                xmlns="http://www.w3.org/2000/svg"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    className="opacity-75"
-                                    fill="currentColor"
-                                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                                />
-                            </svg>
-                            <span>Preparing...</span>
-                        </div>
-                    </div>,
-                    document.body
-                )}
             {minting &&
                 createPortal(
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">

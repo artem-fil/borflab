@@ -9,6 +9,7 @@ export default function Card({ monster }) {
     const [flipped, setFlipped] = useState(false);
     const {
         Name,
+        UserId,
         Habitat,
         Species,
         Biome,
@@ -70,7 +71,7 @@ export default function Card({ monster }) {
                         <hr className={`border-0 h-0.5 ${bg}`} />
                         <p className=" leading-none p-1">
                             <strong className="uppercase">BORFOLOGIST ID: </strong>
-                            {`# PSM-0000001-25/I`}
+                            {`# ${UserId.slice(-6)}/I`}
                         </p>
                         <hr className={`border-0 h-0.5 ${bg}`} />
                         <p className=" leading-none p-1">

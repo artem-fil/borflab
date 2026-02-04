@@ -36,7 +36,7 @@ func (db *DB) Close() error {
 	return db.Conn.Close()
 }
 
-func (db *DB) UpsertUser(ctx context.Context, u *User) (*User, error) {
+func (db *DB) UpsertUser(ctx context.Context, u *User) (*User, bool, error) {
 	row := db.Conn.QueryRowContext(
 		ctx,
 		`
@@ -47,7 +47,13 @@ do update set
 	email = excluded.email,
 	wallets = excluded.wallets,
 	synced = now()
-returning privy_id, email, wallets, created, synced
+returning
+	privy_id,
+	email,
+	wallets,
+	created,
+	synced,
+	(xmax = 0) as is_new
 	`,
 		u.PrivyId,
 		nullable(u.Email),
@@ -55,13 +61,22 @@ returning privy_id, email, wallets, created, synced
 	)
 
 	var updated User
+	var isNew bool
 	var wallets pq.StringArray
 
-	if err := row.Scan(&updated.PrivyId, &updated.Email, &wallets, &updated.Created, &updated.Synced); err != nil {
-		return nil, err
+	if err := row.Scan(
+		&updated.PrivyId,
+		&updated.Email,
+		&wallets,
+		&updated.Created,
+		&updated.Synced,
+		&isNew,
+	); err != nil {
+		return nil, false, err
 	}
+
 	updated.Wallets = []string(wallets)
-	return &updated, nil
+	return &updated, isNew, nil
 }
 
 func (db *DB) GetLastSignature(ctx context.Context) (string, error) {
@@ -741,6 +756,39 @@ func (db *DB) UpdateOrder(ctx context.Context, orderId string, status string) (*
 	return &order, nil
 }
 
+func (db *DB) SelectPurchases(ctx context.Context, userId string) ([]Purchase, error) {
+	var purchases []Purchase
+	rows, err := db.Conn.QueryContext(
+		ctx,
+		`
+select id, user_id, order_id, product, status, payload, created, opened
+from purchases where user_id = $1 and status = 'sealed' and opened is null;`, userId,
+	)
+	if err != nil {
+		return purchases, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var purchase Purchase
+		err := rows.Scan(
+			&purchase.Id,
+			&purchase.UserId,
+			&purchase.OrderId,
+			&purchase.Product,
+			&purchase.Status,
+			&purchase.Payload,
+			&purchase.Created,
+			&purchase.Opened,
+		)
+		if err != nil {
+			return purchases, err
+		}
+		purchases = append(purchases, purchase)
+	}
+	return purchases, nil
+}
+
 func (db *DB) InsertPurchase(ctx context.Context, purchase *Purchase) (*Purchase, error) {
 	payloadJson, err := json.Marshal(purchase.Payload)
 	if err != nil {
@@ -750,16 +798,17 @@ func (db *DB) InsertPurchase(ctx context.Context, purchase *Purchase) (*Purchase
 	var inserted Purchase
 	err = db.Conn.QueryRowContext(
 		ctx,
-		`insert into purchases (user_id, order_id, product, status, payload)
-         values ($1, $2, $3, $4, $5)
-         returning id, user_id, order_id, product, status, payload, created, opened`,
-		purchase.UserId, purchase.OrderId, purchase.Product, "sealed", payloadJson,
+		`insert into purchases (user_id, order_id, product, status, provider, payload)
+         values ($1, $2, $3, $4, $5, $6)
+         returning id, user_id, order_id, product, status, provider, payload, created, opened`,
+		purchase.UserId, purchase.OrderId, purchase.Product, "sealed", purchase.Provider, payloadJson,
 	).Scan(
 		&inserted.Id,
 		&inserted.UserId,
 		&inserted.OrderId,
 		&inserted.Product,
 		&inserted.Status,
+		&inserted.Provider,
 		&inserted.Payload,
 		&inserted.Created,
 		&inserted.Opened,

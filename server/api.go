@@ -97,11 +97,36 @@ func (a *api) SyncUser(w *Responder, r *http.Request) {
 		user.Wallets = maybeWallets
 	}
 
-	syncedUser, err := a.db.UpsertUser(ctx, &user)
+	syncedUser, isNew, err := a.db.UpsertUser(ctx, &user)
 	if err != nil {
 		a.DbError(w, err)
 		return
 	}
+
+	if isNew {
+
+		payload := GeneratePackPayload(10)
+
+		marshalledPayload, err := json.Marshal(payload)
+		if err != nil {
+			a.InternalError(w, err)
+			return
+		}
+
+		purchase := &Purchase{
+			UserId:   user.PrivyId,
+			OrderId:  nil,
+			Product:  "pack10",
+			Provider: "free",
+			Payload:  marshalledPayload,
+		}
+
+		if _, err := a.db.InsertPurchase(ctx, purchase); err != nil {
+			a.DbError(w, err)
+			return
+		}
+	}
+
 	w.Send(syncedUser)
 }
 
@@ -115,7 +140,22 @@ func (a *api) GetStones(w *Responder, r *http.Request) {
 		a.DbError(w, err)
 		return
 	}
-	w.Send(stones)
+
+	purchases, err := a.db.SelectPurchases(ctx, claims.Id)
+	if err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	response := struct {
+		Stones    map[string]int
+		Purchases []Purchase
+	}{
+		Stones:    stones,
+		Purchases: purchases,
+	}
+
+	w.Send(response)
 }
 
 func (a *api) GetMonsters(w *Responder, r *http.Request) {
@@ -306,9 +346,9 @@ func (a *api) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		orderId := pi.Metadata["orderId"]
+		orderId := uuid.MustParse(pi.Metadata["orderId"])
 
-		order, err := a.db.UpdateOrder(r.Context(), orderId, "paid")
+		order, err := a.db.UpdateOrder(r.Context(), orderId.String(), "paid")
 		if err != nil {
 			LogError("API", "cannot update order", err)
 			w.WriteHeader(http.StatusOK)
@@ -321,27 +361,28 @@ func (a *api) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		marshalledPayload, err := json.Marshal(payload)
 		if err != nil {
 			LogError("API", "cannot update order", err)
-			a.sseAgent.Emit(orderId, "failed", map[string]any{"error": "cannot finish purchase"})
+			a.sseAgent.Emit(orderId.String(), "failed", map[string]any{"error": "cannot finish purchase"})
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
 		purchase := &Purchase{
-			UserId:  order.UserId,
-			OrderId: uuid.MustParse(pi.Metadata["orderId"]),
-			Product: order.Product,
-			Payload: marshalledPayload,
+			UserId:   order.UserId,
+			OrderId:  &orderId,
+			Product:  order.Product,
+			Provider: "stripe",
+			Payload:  marshalledPayload,
 		}
 
 		inserted, err := a.db.InsertPurchase(r.Context(), purchase)
 
 		if err != nil {
 			LogError("API", "cannot create purchase", err)
-			a.sseAgent.Emit(orderId, "failed", map[string]any{"error": "cannot finish purchase"})
+			a.sseAgent.Emit(orderId.String(), "failed", map[string]any{"error": "cannot finish purchase"})
 		}
 
 		a.sseAgent.Emit(
-			orderId,
+			orderId.String(),
 			"confirmed",
 			map[string]any{"status": "paid", "purchase": inserted},
 		)
@@ -1120,7 +1161,7 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 				programId,
 				[]*solana.AccountMeta{
 					solana.NewAccountMeta(mintPubKey, true, true),                                  // 0. mint (writable: true)
-					solana.NewAccountMeta(userPubKey, true, true),                                  // 1. owner (writable: true, signer: true)
+					solana.NewAccountMeta(userPubKey, true, false),                                 // 1. owner (writable: true, signer: true)
 					solana.NewAccountMeta(borflabVaultPda, true, false),                            // 2. borflab_vault (writable: true)
 					solana.NewAccountMeta(borflabVaultAta, true, false),                            // 3. borflab_vault_ata (writable: true)
 					solana.NewAccountMeta(adminPrivateKey.PublicKey(), false, true),                // 4. authority (signer: true)
@@ -1159,7 +1200,7 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 				programId,
 				[]*solana.AccountMeta{
 					solana.NewAccountMeta(mintPubKey, true, true),                                  // 0. mint
-					solana.NewAccountMeta(userPubKey, true, true),                                  // 1. owner
+					solana.NewAccountMeta(userPubKey, true, false),                                 // 1. owner
 					solana.NewAccountMeta(borflabVaultPda, true, false),                            // 2. borflab_vault
 					solana.NewAccountMeta(borflabVaultAta, true, false),                            // 3. borflab_vault_ata
 					solana.NewAccountMeta(adminPrivateKey.PublicKey(), false, true),                // 4. authority (signer)
@@ -1214,40 +1255,36 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 	tx, err := solana.NewTransaction(
 		instructions,
 		recent.Value.Blockhash,
-		solana.TransactionPayer(userPubKey),
+		solana.TransactionPayer(adminPrivateKey.PublicKey()),
 	)
 	if err != nil {
 		a.InternalError(w, fmt.Errorf("cannot create transaction: %v", err))
 		return
 	}
 
-	_, err = tx.PartialSign(func(key solana.PublicKey) *solana.PrivateKey {
-		switch {
-		case key.Equals(adminPrivateKey.PublicKey()):
+	_, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
+		if key.Equals(adminPrivateKey.PublicKey()) {
 			return &adminPrivateKey
-		case key.Equals(mintPubKey):
-			privateKey := mint.PrivateKey
-			return &privateKey
-		default:
-			return nil
 		}
+		return nil
 	})
 	if err != nil {
 		a.InternalError(w, fmt.Errorf("cannot sign transaction: %v", err))
 		return
 	}
 
-	txBytes, err := tx.MarshalBinary()
+	sig, err := a.rpcClient.SendTransaction(ctx, tx)
 	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot marshal transaction: %v", err))
+		a.InternalError(w, fmt.Errorf("failed to send transaction: %v", err))
 		return
 	}
-	txBase64 := base64.StdEncoding.EncodeToString(txBytes)
+
+	LogInfo("API", fmt.Sprintf("Transaction sent: %s", sig.String()))
 
 	response := struct {
-		TxBase64 string
+		Signature string `json:"signature"`
 	}{
-		TxBase64: txBase64,
+		Signature: sig.String(),
 	}
 
 	w.Send(response)

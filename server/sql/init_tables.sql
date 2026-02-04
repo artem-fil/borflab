@@ -145,7 +145,7 @@ create table if not exists orders (
 
 create table if not exists purchases (
     id serial primary key, 
-    user_id text references users(privy_id) on delete cascade,
+    user_id text not null references users(privy_id) on delete cascade,
     order_id uuid references orders(id) on delete cascade,
     product text not null check (product IN (
         'pack10',
@@ -155,7 +155,15 @@ create table if not exists purchases (
         'sealed',
         'opened'
     )),
+    provider text not null check (provider IN (
+        'stripe',
+        'free'
+    )),
     payload jsonb not null,
     created timestamptz not null default now(),
-    opened timestamptz
+    opened timestamptz,
+    check (
+      (provider = 'stripe' and order_id is not null)
+      or (provider != 'stripe' and order_id is null)
+    )
 );

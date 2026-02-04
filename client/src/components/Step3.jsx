@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import posterImg from "@images/poster.png";
+import poster3Img from "@images/poster03.png";
 import analyzerImg from "@images/analyzer.png";
 import labSound from "@sounds/lab.ogg";
 import api from "../api";
@@ -142,7 +142,7 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
     return (
         <div className="flex flex-col h-full justify-end">
             <div className="flex-1 flex items-center justify-center overflow-hidden">
-                <img src={posterImg} alt="poster" className="max-h-full max-w-full object-contain" />
+                <img src={poster3Img} alt="poster" className="max-h-full max-w-full object-contain" />
             </div>
 
             <div className="relative w-full">
@@ -150,10 +150,10 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
                 <div
                     className="absolute text-xs text-lime-500 font-[monospace,emoji] leading-tight"
                     style={{
-                        top: "18%",
-                        left: "13%",
-                        width: "66%",
-                        aspectRatio: "1 / 0.6",
+                        top: "16%",
+                        left: "12%",
+                        width: "67%",
+                        aspectRatio: "1 / 0.8",
                     }}
                 >
                     <div
@@ -177,32 +177,40 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
                 </div>
                 {/* indicators */}
                 <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 15 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "54.2%", left: "89.5%", width: "3%" }}
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 10 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "61.3%", left: "89.5%", width: "3%" }}
+                />
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 20 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "56.1%", left: "89.5%", width: "3%" }}
                 />
                 <div
                     className={`absolute z-10 aspect-square rounded-full ${progress > 30 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "47.8%", left: "89.5%", width: "3%" }}
+                    style={{ top: "50.5%", left: "89.5%", width: "3%" }}
                 />
                 <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 45 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "41.5%", left: "89.5%", width: "3%" }}
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 40 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "45.3%", left: "89.5%", width: "3%" }}
+                />
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 50 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "40.5%", left: "89.5%", width: "3%" }}
                 />
                 <div
                     className={`absolute z-10 aspect-square rounded-full ${progress > 60 ? "bg-green-500/50" : ""}`}
                     style={{ top: "35.1%", left: "89.5%", width: "3%" }}
                 />
                 <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 75 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "28.8%", left: "89.5%", width: "3%" }}
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 70 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "29.5%", left: "89.5%", width: "3%" }}
                 />
                 <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 90 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "22.5%", left: "89.5%", width: "3%" }}
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 80 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "24.2%", left: "89.5%", width: "3%" }}
                 />
                 <div
                     className={`absolute z-10 aspect-square rounded-full ${progress >= 100 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "16.1%", left: "89.5%", width: "3%" }}
+                    style={{ top: "19%", left: "89.5%", width: "3%" }}
                 />
                 <img src={analyzerImg} alt="analyzer" className="w-full h-auto object-contain" />
             </div>

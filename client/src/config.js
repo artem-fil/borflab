@@ -122,6 +122,11 @@ export const BIOMES = {
         border: `border-pink-700`,
         text: `text-pink-700`,
     },
+    coralux: {
+        bg: `bg-cyan-700`,
+        border: `border-cyan-700`,
+        text: `text-cyan-700`,
+    },
 };
 
 export const PRODUCTS = {
