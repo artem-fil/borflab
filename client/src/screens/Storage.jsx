@@ -67,120 +67,6 @@ export default function Storage() {
         }
     }
 
-    async function mintStone() {
-        if (minting || preparing) return;
-
-        try {
-            setIsPreparing(true);
-            const { TxBase64 } = await api.prepareStoneMint({
-                userPubKey: solanaWallet.address,
-            });
-
-            function base64ToUint8Array(base64) {
-                const raw = atob(base64);
-                const array = new Uint8Array(raw.length);
-                for (let i = 0; i < raw.length; i++) {
-                    array[i] = raw.charCodeAt(i);
-                }
-                return array;
-            }
-
-            const txBytes = base64ToUint8Array(TxBase64);
-            const transaction = Transaction.from(txBytes);
-
-            const serializedTx = transaction.serialize({
-                requireAllSignatures: false,
-                verifySignatures: false,
-            });
-            setIsPreparing(false);
-            const txUint8Array = new Uint8Array(serializedTx);
-
-            const { signedTransaction } = await signTransaction({
-                wallet: solanaWallet,
-                transaction: txUint8Array,
-                chain: "solana:devnet",
-            });
-
-            console.log("🚀 Sending transaction...");
-            const connection = new Connection(ENDPOINT, "confirmed");
-
-            const txid = await connection.sendRawTransaction(signedTransaction);
-
-            setIsMinting(true);
-
-            mintTimeoutRef.current && clearTimeout(mintTimeoutRef.current);
-
-            mintTimeoutRef.current = setTimeout(() => {
-                console.warn("⏰ Mint SSE timeout");
-                mintSSERef.current?.close();
-                mintSSERef.current = null;
-                console.error("Mint is taking longer than usual. Check your storage later ");
-            }, 60000);
-
-            mintSSERef.current?.close();
-            mintSSERef.current = null;
-
-            mintSSERef.current = api.subscribeSSE(txid, {
-                onEvent: (event, data) => {
-                    if (event === "confirmed") {
-                        setMintSuccess(true);
-                        mintFinishedRef.current = true;
-
-                        clearTimeout(mintTimeoutRef.current);
-                        mintTimeoutRef.current = null;
-
-                        mintSSERef.current?.close();
-                        mintSSERef.current = null;
-
-                        console.log("🎉 Server confirmed mint!", data);
-                        console.log("🎉 Mint successful!");
-                    }
-
-                    if (event === "failed") {
-                        setMintError(true);
-                        mintFinishedRef.current = true;
-
-                        clearTimeout(mintTimeoutRef.current);
-                        mintTimeoutRef.current = null;
-
-                        mintSSERef.current?.close();
-                        mintSSERef.current = null;
-
-                        console.error("❌ Mint failed on server", data);
-                    }
-                },
-
-                onError: () => {
-                    console.warn("⚠️ SSE temporarily disconnected, retrying...");
-                },
-            });
-
-            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-
-            await connection
-                .confirmTransaction(
-                    {
-                        signature: txid,
-                        blockhash,
-                        lastValidBlockHeight,
-                    },
-                    "confirmed"
-                )
-                .catch(console.warn);
-
-            console.log("✅ NFT minted successfully!");
-            console.log("🎉 Result:");
-            console.log(`Transaction: ${txid}`);
-            console.log(`TX Explorer: https://explorer.solana.com/tx/${txid}?cluster=devnet`);
-        } catch (err) {
-            console.error("❌ Transaction failed:");
-            console.error(err);
-        } finally {
-            clearTimeout(mintTimeoutRef.current);
-            mintTimeoutRef.current = null;
-        }
-    }
-
     const formatSparks = (type) => (loading ? "..." : (availableStones[type] || 0).toString().padStart(2, "0"));
 
     return (
@@ -400,8 +286,7 @@ export default function Storage() {
                 )}
             </div>
             <div className="w-full h-4 bg-gray-100 shadow-md"></div>
-            <div className="py-2 flex gap-4">
-                <Button disabled={!solanaWallet} onClick={mintStone} alt label={"mint"} />
+            <div className="py-2">
                 <Button onClick={() => navigate("/lab")} alt label={"go lab"} />
             </div>
             {preparing &&

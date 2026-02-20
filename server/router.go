@@ -31,12 +31,12 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 
 	router.Handle("GET", "/api/stones", mddlwr.RequireAuth(api.GetStones))
 	router.Handle("GET", "/api/monsters", mddlwr.RequireAuth(api.GetMonsters))
+	router.Handle("GET", "/api/monsters/:id", mddlwr.RequireAuth(api.GetMonster))
 	router.Handle("GET", "/api/counter", mddlwr.RequireAuth(api.GetCounter))
 	router.Handle("GET", "/api/products", mddlwr.RequireAuth(api.GetProducts))
 	router.Handle("POST", "/api/users/sync", mddlwr.RequireAuth(api.SyncUser))
 	router.Handle("POST", "/api/analyze", mddlwr.RequireAuth(api.AnalyzeSpecimen))
 	router.Handle("POST", "/api/prepare-monster-mint/:id", mddlwr.RequireAuth(api.PrepareMonsterMint))
-	router.Handle("POST", "/api/prepare-stone-mint", mddlwr.RequireAuth(api.PrepareStoneMint))
 	router.Handle("POST", "/api/prepare-monster-swap", mddlwr.RequireAuth(api.PrepareMonsterSwap))
 	router.Handle("POST", "/api/create-payment", mddlwr.RequireAuth(api.CreatePayment))
 	router.Handle("PUT", "/api/purchases/:id", mddlwr.RequireAuth(api.OpenPurchase))

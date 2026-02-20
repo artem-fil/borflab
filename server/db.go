@@ -137,7 +137,7 @@ func (db *DB) SelectStone(ctx context.Context, stoneType string, userId string) 
 		ctx,
 		`
         select 
-            id, user_id, origin, mint_address, owner_address, spark_count, 
+            id, user_id, mint_address, owner_address, spark_count, 
             type, pda_address, signature, slot, minted, created
         from stones 
         where user_id = $1 
@@ -150,7 +150,6 @@ func (db *DB) SelectStone(ctx context.Context, stoneType string, userId string) 
 	).Scan(
 		&stone.Id,
 		&stone.UserId,
-		&stone.Origin,
 		&stone.MintAddress,
 		&stone.OwnerAddress,
 		&stone.SparkCount,
@@ -176,8 +175,7 @@ func (db *DB) SelectSuitableStone(ctx context.Context, stoneType string, userId 
 		`
         select 
     id, 
-    user_id, 
-    origin, 
+    user_id,
     mint_address, 
     owner_address, 
     spark_count, 
@@ -191,17 +189,13 @@ from stones
 where user_id = $1 
   and type = $2 
   and spark_count > 0
-order by 
-    (origin = 'fiat') desc, 
-    spark_count asc         
-limit 1;
+order by spark_count asc limit 1;
         `,
 		userId,
 		stoneType,
 	).Scan(
 		&stone.Id,
 		&stone.UserId,
-		&stone.Origin,
 		&stone.MintAddress,
 		&stone.OwnerAddress,
 		&stone.SparkCount,
@@ -834,12 +828,11 @@ with updated_purchase as (
     returning id, user_id, order_id, product, status, payload, created, opened
 ),
 inserted_stones as (
-    insert into stones (user_id, type, spark_count, origin)
+    insert into stones (user_id, type, spark_count)
     select 
         p.user_id, 
         kv.key::stone,
-        kv.value::smallint,
-        'fiat'
+        kv.value::smallint
     from updated_purchase p, 
     jsonb_each_text(p.payload) as kv
 )
@@ -883,42 +876,6 @@ func (db *DB) UpdateSolanaNotification(ctx context.Context, n *SolanaNotificatio
 	return err
 }
 
-func (db *DB) InsertStoneTx(ctx context.Context, tx *sql.Tx, stone *Stone) error {
-
-	result, err := tx.ExecContext(
-		ctx,
-		`
-		insert into stones (
-			user_id, origin, mint_address, owner_address, spark_count, type, pda_address, signature, slot, minted
-		) values ((select privy_id from users where $1 = any(wallets)), $2, $3, $4, $5, $6, $7, $8, $9)
-		on conflict (signature) do nothing
-		`,
-		stone.OwnerAddress,
-		stone.Origin,
-		stone.MintAddress,
-		stone.OwnerAddress,
-		stone.SparkCount,
-		stone.Type,
-		stone.PdaAddress,
-		stone.Signature,
-		stone.Slot,
-		stone.Minted,
-	)
-	if err != nil {
-		return err
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
-		return fmt.Errorf("no rows updated for address: %s", stone.MintAddress)
-	}
-	return err
-}
-
 func (db *DB) DecreaseStoneSparksTx(ctx context.Context, tx *sql.Tx, monster *Monster) error {
 	result, err := tx.ExecContext(
 		ctx,
@@ -930,7 +887,6 @@ where id = (
     from stones
     where user_id in (select privy_id from users where $1 = any(wallets))
       and type = $2
-      and origin = 'fiat'
       and spark_count > 0
     order by spark_count asc
     limit 1
@@ -948,30 +904,6 @@ where id = (
 
 	if rowsAffected == 0 {
 		return fmt.Errorf("no stone updated for minted monster: %+v", monster)
-	}
-	return err
-}
-
-func (db *DB) UpdateStoneTx(ctx context.Context, tx *sql.Tx, stoneAddress string, sparkCount int) error {
-
-	result, err := tx.ExecContext(
-		ctx,
-		`
-		update stones set spark_count = $1 where mint_address = $2 and origin = 'crypto'
-		`,
-		sparkCount,
-		stoneAddress,
-	)
-	if err != nil {
-		return err
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
-		return fmt.Errorf("no rows updated for address: %s", stoneAddress)
 	}
 	return err
 }

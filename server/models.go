@@ -106,7 +106,6 @@ type Experiment struct {
 type Stone struct {
 	Id           int
 	UserId       string
-	Origin       string
 	MintAddress  *string
 	OwnerAddress *string
 	SparkCount   int

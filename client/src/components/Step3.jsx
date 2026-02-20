@@ -45,7 +45,8 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
 
     function subscribeAnalyzeProgress(analyzeTaskId) {
         const TIMEOUT_MS = 3 * 60 * 1000;
-        let currentStep = 0;
+        // localStep — это наш синхронный счетчик, чтобы не было дублей
+        let localStep = 0;
         let timeout = null;
 
         const clearAll = () => {
@@ -65,17 +66,25 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
         }, TIMEOUT_MS);
 
         sseRef.current = api.subscribeSSE(analyzeTaskId, {
-            onEvent: async (event, data) => {
+            onEvent: (event, data) => {
+                // Убираем async здесь, нам важна синхронная обработка шагов
                 if (event === "progress") {
                     const { progress } = data;
-
                     setProgress(progress);
 
-                    const step = Math.floor(progress / 10);
-                    if (step > currentStep) {
-                        for (; currentStep < step; currentStep++) {
-                            await appendTypedLine(progressMessages[currentStep]);
-                        }
+                    const targetStep = Math.floor(progress / 10);
+
+                    // СИНХРОННО закидываем сообщения в очередь, пока не дойдем до нужного шага
+                    while (localStep < targetStep && localStep < progressMessages.length) {
+                        const msg = progressMessages[localStep];
+
+                        // Мы не ждем здесь через await!
+                        // appendTypedLine сам ставит сообщения в очередь через queueRef.current
+                        appendTypedLine(msg);
+
+                        // Инкремент происходит МГНОВЕННО.
+                        // Если через 1мс прилетит новый эвент, localStep уже будет новым.
+                        localStep++;
                     }
                 }
 
@@ -84,43 +93,48 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
                     clearAll();
 
                     const { result, nextTask } = data;
-
                     setAnalyzeResult(result);
                     setNextTask(nextTask);
 
-                    await appendTypedLine("Analysis complete!");
+                    appendTypedLine("Analysis complete!");
 
-                    setTimeout(next, 1500);
+                    // Ждем окончания печати всей очереди, прежде чем идти дальше
+                    queueRef.current.then(() => {
+                        setTimeout(next, 1500);
+                    });
                 }
 
                 if (event === "failed") {
                     setProgress(100);
                     clearAll();
                     const { error } = data;
-                    await appendTypedLine(`❌ ${error}`);
+                    appendTypedLine(`❌ ${error}`);
                 }
             },
 
-            onError: async (err) => {
+            onError: (err) => {
                 clearAll();
                 console.error(err);
-                await appendTypedLine(`❌ Cannot subscribe SSE`);
-                await appendTypedLine("Please, try again.");
+                appendTypedLine(`❌ Cannot subscribe SSE`);
+                appendTypedLine("Please, try again.");
             },
         });
     }
 
     async function appendTypedLine(line = "") {
-        if (!line) return queueRef.current;
+        if (!line) return;
 
+        // Цепляемся к хвосту очереди
         queueRef.current = queueRef.current.then(async () => {
             typingRef.current = true;
 
+            // Печатаем строку посимвольно
             for (let i = 0; i < line.length; i++) {
                 setDisplayed((prev) => prev + line[i]);
                 await new Promise((r) => setTimeout(r, 30));
             }
 
+            // Добавляем перенос строки в конце
             setDisplayed((prev) => prev + "\n");
             typingRef.current = false;
         });

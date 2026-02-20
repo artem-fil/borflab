@@ -52,10 +52,6 @@ type mintMonsterForm struct {
 	UserPubKey string `json:"userPubKey"`
 }
 
-type mintStoneForm struct {
-	UserPubKey string `json:"userPubKey"`
-}
-
 type swapMonsterForm struct {
 	UserPubKey    string `json:"userPubKey"`
 	MonsterPubKey string `json:"monsterPubKey"`
@@ -202,6 +198,27 @@ func (a *api) GetMonsters(w *Responder, r *http.Request) {
 		Monsters: monsters,
 		Total:    total,
 		Pages:    pages,
+	}
+	w.Send(response)
+}
+
+func (a *api) GetMonster(w *Responder, r *http.Request) {
+
+	ctx := r.Context()
+	claims, _ := Claims(r)
+
+	monsterId := Param(r)
+
+	monster, err := a.db.SelectMonster(ctx, monsterId, claims.Id)
+	if err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	response := struct {
+		Monster Monster
+	}{
+		Monster: monster,
 	}
 	w.Send(response)
 }
@@ -532,7 +549,7 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	})
 	prompt := fmt.Sprintf(Prompts.PromptAnalyze[experiment.Biome], Prompts.PromptStone[experiment.Stone])
 	requestBody := map[string]any{
-		"model": "gpt-4o",
+		"model": "gpt-5.2-chat-latest",
 		"messages": []map[string]any{
 			{
 				"role": "system",
@@ -559,7 +576,7 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 				},
 			},
 		},
-		"max_tokens": 1000,
+		"max_completion_tokens": 1000,
 	}
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
@@ -950,7 +967,6 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 
 	ctx := r.Context()
-	claims, _ := Claims(r)
 	experimentId := Param(r)
 
 	form := &mintMonsterForm{}
@@ -976,11 +992,6 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 	user_id := 12345
 	experiment_id := experiment.Id
 
-	selectedStone, err := a.db.SelectSuitableStone(ctx, string(experiment.Stone), claims.Id)
-	if err != nil {
-		a.DbError(w, fmt.Errorf("cannot select experiment %v", err))
-		return
-	}
 	programId := solana.MustPublicKeyFromBase58(a.cfg.Solana.ProgramId)
 	userPubKey := solana.MustPublicKeyFromBase58(form.UserPubKey)
 	cardCollectionPubKey := solana.MustPublicKeyFromBase58(a.cfg.Solana.CardCollectionPubKey)
@@ -995,8 +1006,11 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 		return
 	}
 	// 3. Admin verification
+	rpcCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	adminAccount, err := a.rpcClient.GetAccountInfoWithOpts(
-		ctx,
+		rpcCtx,
 		cardMintAdminPda,
 		&rpc.GetAccountInfoOpts{
 			Commitment: rpc.CommitmentConfirmed,
@@ -1055,186 +1069,44 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 
 	var mintCardIx solana.Instruction
 
-	switch selectedStone.Origin {
-	case "crypto":
-		{
-			cardTypePda, _, err := solana.FindProgramAddress(
-				[][]byte{[]byte("card_type")},
-				programId,
-			)
-			if selectedStone.MintAddress == nil {
-				a.InternalError(w, fmt.Errorf("selected stone has no mint address %v", selectedStone.Type))
-				return
-			}
-			stonePubKey, err := solana.PublicKeyFromBase58(*selectedStone.MintAddress)
-			if err != nil {
-				a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
-				return
-			}
-			stoneStatePda, _, err := solana.FindProgramAddress(
-				[][]byte{[]byte("stone_state"), stonePubKey.Bytes()},
-				programId,
-			)
-			if err != nil {
-				a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
-				return
-			}
-			// Stone state verification
-			stoneStateAccount, err := a.rpcClient.GetAccountInfoWithOpts(
-				ctx,
-				stoneStatePda,
-				&rpc.GetAccountInfoOpts{
-					Commitment: rpc.CommitmentConfirmed,
-				},
-			)
-			if err != nil {
-				a.InternalError(w, fmt.Errorf("cannot get stone state account: %v", err))
-				return
-			}
-			if stoneStateAccount == nil || stoneStateAccount.Value == nil {
-				a.InternalError(w, fmt.Errorf("cannot validate stone state account: %v", err))
-				return
-			}
-			stoneState := stoneStateAccount.Value.Data.GetBinary()
-			if len(stoneState) < 2 {
-				a.InternalError(w, fmt.Errorf("stone state data too short"))
-				return
-			}
-			sparksRemaining := binary.LittleEndian.Uint16(stoneState[32:34])
-			if sparksRemaining <= 0 {
-				a.BadRequestError(w, fmt.Errorf("selected stone has no sparks"))
-				return
-			}
+	cardTypePda, _, _ := solana.FindProgramAddress([][]byte{[]byte("spark_card_type")}, programId)
+	sparkCardStatePda, _, _ := solana.FindProgramAddress(
+		[][]byte{[]byte("spark_card_state"), mintPubKey.Bytes()},
+		programId,
+	)
 
-			// 5. Card verification
-			cardTypeAccount, err := a.rpcClient.GetAccountInfoWithOpts(
-				ctx,
-				cardTypePda,
-				&rpc.GetAccountInfoOpts{
-					Commitment: rpc.CommitmentConfirmed,
-				},
-			)
-			if err != nil {
-				a.InternalError(w, fmt.Errorf("cannot get card type account: %v", err))
-				return
-			}
-
-			if cardTypeAccount == nil || cardTypeAccount.Value == nil {
-				a.InternalError(w, fmt.Errorf("cannot validate card type account: %v", err))
-				return
-			}
-			cardTypeData := cardTypeAccount.Value.Data.GetBinary()
-			if len(cardTypeData) < 8 {
-				a.InternalError(w, fmt.Errorf("card type too short"))
-				return
-			}
-
-			mintedCount := binary.LittleEndian.Uint32(cardTypeData[0:4])
-			supplyCap := binary.LittleEndian.Uint32(cardTypeData[4:8])
-
-			if mintedCount >= supplyCap {
-				a.BadRequestError(w, fmt.Errorf("card supply cap reached"))
-				return
-			}
-
-			cardStatePda, _, err := solana.FindProgramAddress(
-				[][]byte{[]byte("card_state"), mintPubKey.Bytes()},
-				programId,
-			)
-			if err != nil {
-				a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
-				return
-			}
-
-			// 7. Find ATAs
-
-			stoneUserNftPda, _, err := solana.FindProgramAddress(
-				[][]byte{[]byte("user_nft"), userPubKey.Bytes(), stonePubKey.Bytes()},
-				programId,
-			)
-			if err != nil {
-				a.InternalError(w, fmt.Errorf("cannot find stone nft PDA: %v", err))
-				return
-			}
-
-			mintCardIx = solana.NewInstruction(
-				programId,
-				[]*solana.AccountMeta{
-					solana.NewAccountMeta(mintPubKey, true, true),                                  // 0. mint (writable: true)
-					solana.NewAccountMeta(userPubKey, true, false),                                 // 1. owner (writable: true, signer: true)
-					solana.NewAccountMeta(borflabVaultPda, true, false),                            // 2. borflab_vault (writable: true)
-					solana.NewAccountMeta(borflabVaultAta, true, false),                            // 3. borflab_vault_ata (writable: true)
-					solana.NewAccountMeta(adminPrivateKey.PublicKey(), false, true),                // 4. authority (signer: true)
-					solana.NewAccountMeta(cardMintAdminPda, false, false),                          // 5. card_mint_admin
-					solana.NewAccountMeta(stonePubKey, false, false),                               // 6. stone_mint
-					solana.NewAccountMeta(stoneUserNftPda, false, false),                           // 7. stone_user_nft (PDA ["user_nft", owner, stone_mint])
-					solana.NewAccountMeta(stoneStatePda, true, false),                              // 8. stone_state (writable: true)
-					solana.NewAccountMeta(cardTypePda, true, false),                                // 9. card_type (writable: true)
-					solana.NewAccountMeta(cardStatePda, true, false),                               // 10. card_state (writable: true)
-					solana.NewAccountMeta(userNftPda, true, false),                                 // 11. user_nft (writable: true, PDA ["user_nft", owner, mint])
-					solana.NewAccountMeta(cardCollectionPubKey, false, false),                      // 12. collection_mint
-					solana.NewAccountMeta(collectionMetadata, true, false),                         // 13. collection_metadata (writable: true)
-					solana.NewAccountMeta(collectionMasterEdition, true, false),                    // 14. collection_master_edition (writable: true)
-					solana.NewAccountMeta(metadata, true, false),                                   // 15. metadata (writable: true)
-					solana.NewAccountMeta(masterEdition, true, false),                              // 16. master_edition (writable: true)
-					solana.NewAccountMeta(collectionAuthorityPda, true, false),                     // 17. collection_authority (writable: true)
-					solana.NewAccountMeta(solana.TokenProgramID, false, false),                     // 18. token_program
-					solana.NewAccountMeta(solana.SPLAssociatedTokenAccountProgramID, false, false), // 19. associated_token_program
-					solana.NewAccountMeta(solana.SystemProgramID, false, false),                    // 20. system_program
-					solana.NewAccountMeta(tokenMetadataProgramId, false, false),                    // 21. token_metadata_program
-					solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),                   // 22. rent
-				},
-				encodeMintCardInstructionData(uri, user_id, experiment_id),
-			)
-
-		}
-	case "fiat":
-		{
-			cardTypePda, _, _ := solana.FindProgramAddress([][]byte{[]byte("spark_card_type")}, programId)
-			sparkCardStatePda, _, _ := solana.FindProgramAddress(
-				[][]byte{[]byte("spark_card_state"), mintPubKey.Bytes()},
-				programId,
-			)
-
-			mintCardIx = solana.NewInstruction(
-				programId,
-				[]*solana.AccountMeta{
-					solana.NewAccountMeta(mintPubKey, true, true),                                  // 0. mint
-					solana.NewAccountMeta(userPubKey, true, false),                                 // 1. owner
-					solana.NewAccountMeta(borflabVaultPda, true, false),                            // 2. borflab_vault
-					solana.NewAccountMeta(borflabVaultAta, true, false),                            // 3. borflab_vault_ata
-					solana.NewAccountMeta(adminPrivateKey.PublicKey(), false, true),                // 4. authority (signer)
-					solana.NewAccountMeta(cardMintAdminPda, false, false),                          // 5. card_mint_admin
-					solana.NewAccountMeta(cardTypePda, true, false),                                // 6. spark_card_type
-					solana.NewAccountMeta(sparkCardStatePda, true, false),                          // 7. spark_card_state
-					solana.NewAccountMeta(userNftPda, true, false),                                 // 8. user_nft
-					solana.NewAccountMeta(cardCollectionPubKey, false, false),                      // 9. collection_mint
-					solana.NewAccountMeta(collectionMetadata, true, false),                         // 10. collection_metadata
-					solana.NewAccountMeta(collectionMasterEdition, true, false),                    // 11. collection_master_edition
-					solana.NewAccountMeta(metadata, true, false),                                   // 12. metadata
-					solana.NewAccountMeta(masterEdition, true, false),                              // 13. master_edition
-					solana.NewAccountMeta(collectionAuthorityPda, true, false),                     // 14. collection_authority
-					solana.NewAccountMeta(solana.TokenProgramID, false, false),                     // 15. token_program
-					solana.NewAccountMeta(solana.SPLAssociatedTokenAccountProgramID, false, false), // 16. associated_token_program
-					solana.NewAccountMeta(solana.SystemProgramID, false, false),                    // 17. system_program
-					solana.NewAccountMeta(tokenMetadataProgramId, false, false),                    // 18. token_metadata_program
-					solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),                   // 19. rent
-				},
-				encodeMintSparkCardInstanceData(uri, user_id, experiment_id),
-			)
-		}
-	default:
-		{
-			a.BadRequestError(w, fmt.Errorf("stone not found"))
-			return
-		}
-	}
+	mintCardIx = solana.NewInstruction(
+		programId,
+		[]*solana.AccountMeta{
+			solana.NewAccountMeta(mintPubKey, true, false),                                 // 0. mint
+			solana.NewAccountMeta(userPubKey, true, false),                                 // 1. owner
+			solana.NewAccountMeta(borflabVaultPda, true, false),                            // 2. borflab_vault
+			solana.NewAccountMeta(borflabVaultAta, true, false),                            // 3. borflab_vault_ata
+			solana.NewAccountMeta(adminPrivateKey.PublicKey(), true, true),                 // 4. authority (signer)
+			solana.NewAccountMeta(cardMintAdminPda, false, false),                          // 5. card_mint_admin
+			solana.NewAccountMeta(cardTypePda, true, false),                                // 6. spark_card_type
+			solana.NewAccountMeta(sparkCardStatePda, true, false),                          // 7. spark_card_state
+			solana.NewAccountMeta(userNftPda, true, false),                                 // 8. user_nft
+			solana.NewAccountMeta(cardCollectionPubKey, false, false),                      // 9. collection_mint
+			solana.NewAccountMeta(collectionMetadata, true, false),                         // 10. collection_metadata
+			solana.NewAccountMeta(collectionMasterEdition, true, false),                    // 11. collection_master_edition
+			solana.NewAccountMeta(metadata, true, false),                                   // 12. metadata
+			solana.NewAccountMeta(masterEdition, true, false),                              // 13. master_edition
+			solana.NewAccountMeta(collectionAuthorityPda, true, false),                     // 14. collection_authority
+			solana.NewAccountMeta(solana.TokenProgramID, false, false),                     // 15. token_program
+			solana.NewAccountMeta(solana.SPLAssociatedTokenAccountProgramID, false, false), // 16. associated_token_program
+			solana.NewAccountMeta(solana.SystemProgramID, false, false),                    // 17. system_program
+			solana.NewAccountMeta(tokenMetadataProgramId, false, false),                    // 18. token_metadata_program
+			solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),                   // 19. rent
+		},
+		encodeMintSparkCardInstanceData(uri, user_id, experiment_id),
+	)
 
 	createMintAccountIx := system.NewCreateAccountInstruction(
 		mintRent,
 		82,
 		solana.TokenProgramID,
-		userPubKey,
+		adminPrivateKey.PublicKey(),
 		mintPubKey,
 	).Build()
 
@@ -1266,6 +1138,10 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 		if key.Equals(adminPrivateKey.PublicKey()) {
 			return &adminPrivateKey
 		}
+		if key.Equals(mint.PublicKey()) {
+			priv := mint.PrivateKey
+			return &priv
+		}
 		return nil
 	})
 	if err != nil {
@@ -1285,304 +1161,6 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 		Signature string `json:"signature"`
 	}{
 		Signature: sig.String(),
-	}
-
-	w.Send(response)
-
-}
-
-func (a *api) PrepareStoneMint(w *Responder, r *http.Request) {
-
-	form := &mintStoneForm{}
-	if err := ParseBody(r, &form); err != nil {
-		a.BadRequestError(w, err)
-		return
-	}
-	user_id := 12345
-	// === SOLANA logic ===
-
-	// 1. Prepare keys
-	ctx := context.Background()
-	programId, err := solana.PublicKeyFromBase58(a.cfg.Solana.ProgramId)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
-		return
-	}
-	userPubKey, err := solana.PublicKeyFromBase58(form.UserPubKey)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("invalid wallet public key: %v", err))
-		return
-	}
-	stoneCollectionPubKey, err := solana.PublicKeyFromBase58(a.cfg.Solana.StoneCollectionPubKey)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
-		return
-	}
-	tokenMetadataProgramId, err := solana.PublicKeyFromBase58(TOKEN_METADATA_PROGRAM_ID)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot encode public key: %v", err))
-		return
-	}
-
-	// 2. Find PDAs
-
-	collectionAuthorityPda, _, err := solana.FindProgramAddress(
-		[][]byte{[]byte("collection_authority")},
-		programId,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
-		return
-	}
-	treasury, _, err := solana.FindProgramAddress(
-		[][]byte{[]byte("treasury")},
-		programId,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
-		return
-	}
-
-	// 6. Generate new mint
-	mint := solana.NewWallet()
-	mintPubKey := mint.PublicKey()
-
-	stoneStatePda, _, err := solana.FindProgramAddress(
-		[][]byte{[]byte("stone_state"), mintPubKey.Bytes()},
-		programId,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
-		return
-	}
-
-	// 7. Find ATAs
-
-	borflabVaultPda, _, err := solana.FindProgramAddress(
-		[][]byte{[]byte("borflab_vault")},
-		programId,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find borflab_vault PDA: %v", err))
-		return
-	}
-
-	borflabVaultAta, _, err := solana.FindAssociatedTokenAddress(
-		borflabVaultPda,
-		mintPubKey,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find borflab_vault ATA: %v", err))
-		return
-	}
-
-	userNftPda, _, err := solana.FindProgramAddress(
-		[][]byte{
-			[]byte("user_nft"),
-			userPubKey.Bytes(),
-			mintPubKey.Bytes(),
-		},
-		programId,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find user_nft PDA: %v", err))
-		return
-	}
-
-	// 8. Find metaplex PDAs
-	metadata, _, err := solana.FindProgramAddress(
-		[][]byte{
-			[]byte("metadata"),
-			tokenMetadataProgramId.Bytes(),
-			mintPubKey.Bytes(),
-		},
-		tokenMetadataProgramId,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
-		return
-	}
-
-	masterEdition, _, err := solana.FindProgramAddress(
-		[][]byte{
-			[]byte("metadata"),
-			tokenMetadataProgramId.Bytes(),
-			mintPubKey.Bytes(),
-			[]byte("edition"),
-		},
-		tokenMetadataProgramId,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
-		return
-	}
-
-	collectionMetadata, _, err := solana.FindProgramAddress(
-		[][]byte{
-			[]byte("metadata"),
-			tokenMetadataProgramId.Bytes(),
-			stoneCollectionPubKey.Bytes()},
-		tokenMetadataProgramId,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
-		return
-	}
-
-	collectionMasterEdition, _, err := solana.FindProgramAddress(
-		[][]byte{
-			[]byte("metadata"),
-			tokenMetadataProgramId.Bytes(),
-			stoneCollectionPubKey.Bytes(),
-			[]byte("edition"),
-		},
-		tokenMetadataProgramId,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot find PDA: %v", err))
-		return
-	}
-
-	mintRent, err := a.rpcClient.GetMinimumBalanceForRentExemption(
-		ctx,
-		82,
-		rpc.CommitmentConfirmed,
-	)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot get mint rent: %v", err))
-		return
-	}
-
-	createMintAccountIx := system.NewCreateAccountInstruction(
-		mintRent,
-		82,
-		solana.TokenProgramID,
-		userPubKey,
-		mintPubKey,
-	).Build()
-
-	stoneTypes := []string{"Quartz", "Amazonite", "Ruby", "Agate", "Sapphire", "Topaz", "Jade"}
-	stoneTypePdas := []solana.PublicKey{}
-	for _, t := range stoneTypes {
-		pda, _, err := solana.FindProgramAddress(
-			[][]byte{
-				[]byte("stone_type"),
-				[]byte(t),
-			},
-			programId,
-		)
-		if err != nil {
-			a.InternalError(w, fmt.Errorf("cannot find PDA for stone type %s: %v", t, err))
-			return
-		}
-		stoneTypePdas = append(stoneTypePdas, pda)
-	}
-
-	accounts := []*solana.AccountMeta{
-		// 1. mint (writable: true)
-		solana.NewAccountMeta(mintPubKey, true, true),
-		// 2. owner (writable: true, signer: true)
-		solana.NewAccountMeta(userPubKey, true, true),
-		// 3. borflab_vault (writable: true)
-		solana.NewAccountMeta(borflabVaultPda, true, false),
-		// 4. borflab_vault_ata (writable: true)
-		solana.NewAccountMeta(borflabVaultAta, true, false),
-		// 5. stone_state (writable: true)
-		solana.NewAccountMeta(stoneStatePda, true, false),
-		// 6. user_nft (writable: true)
-		solana.NewAccountMeta(userNftPda, true, false),
-		// 7. collection_mint (writable: false)
-		solana.NewAccountMeta(stoneCollectionPubKey, false, false),
-		// 8. collection_metadata (writable: true)
-		solana.NewAccountMeta(collectionMetadata, true, false),
-		// 9. collection_master_edition (writable: true)
-		solana.NewAccountMeta(collectionMasterEdition, true, false),
-		// 10. metadata (writable: true)
-		solana.NewAccountMeta(metadata, true, false),
-		// 11. master_edition (writable: true)
-		solana.NewAccountMeta(masterEdition, true, false),
-		// 12. collection_authority (writable: true)
-		solana.NewAccountMeta(collectionAuthorityPda, true, false),
-		// 13. treasury (writable: true)
-		solana.NewAccountMeta(treasury, true, false),
-		// 14. token_program
-		solana.NewAccountMeta(solana.TokenProgramID, false, false),
-		// 15. associated_token_program
-		solana.NewAccountMeta(solana.SPLAssociatedTokenAccountProgramID, false, false),
-		// 16. system_program
-		solana.NewAccountMeta(solana.SystemProgramID, false, false),
-		// 17. token_metadata_program
-		solana.NewAccountMeta(tokenMetadataProgramId, false, false),
-		// 18. rent
-		solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),
-		// 19. recent_blockhashes
-		solana.NewAccountMeta(solana.SysVarRecentBlockHashesPubkey, false, false),
-	}
-
-	for _, stonePda := range stoneTypePdas {
-		accounts = append(
-			accounts,
-			solana.NewAccountMeta(stonePda, true, false),
-		)
-	}
-
-	mintStoneIx := solana.NewInstruction(
-		programId,
-		accounts,
-		encodeMintStoneInstructionData(user_id),
-	)
-
-	computeBudgetIx := computebudget.NewSetComputeUnitLimitInstruction(400000).Build()
-
-	recent, err := a.rpcClient.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot get latest blockhash: %v", err))
-		return
-	}
-
-	instructions := []solana.Instruction{
-		computeBudgetIx,
-		createMintAccountIx,
-		mintStoneIx,
-	}
-
-	tx, err := solana.NewTransaction(
-		instructions,
-		recent.Value.Blockhash,
-		solana.TransactionPayer(userPubKey),
-	)
-
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot create transaction: %v", err))
-		return
-	}
-
-	_, err = tx.PartialSign(func(key solana.PublicKey) *solana.PrivateKey {
-		switch {
-		case key.Equals(mintPubKey):
-			privateKey := mint.PrivateKey
-			return &privateKey
-		default:
-			return nil
-		}
-	})
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot sign transaction: %v", err))
-		return
-	}
-
-	txBytes, err := tx.MarshalBinary()
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot marshal transaction: %v", err))
-		return
-	}
-
-	txBase64 := base64.StdEncoding.EncodeToString(txBytes)
-
-	response := struct {
-		TxBase64 string
-	}{
-		TxBase64: txBase64,
 	}
 
 	w.Send(response)
@@ -1912,31 +1490,6 @@ func encodeSwapCardInstructionData() []byte {
 	return []byte{143, 210, 95, 198, 96, 127, 195, 247}
 }
 
-func encodeMintCardInstructionData(uri string, user_id, experiment_id int) []byte {
-	encodeAnchorString := func(s string) []byte {
-		buf := make([]byte, 4+len(s))
-		binary.LittleEndian.PutUint32(buf[0:4], uint32(len(s)))
-		copy(buf[4:], []byte(s))
-		return buf
-	}
-	encodeAnchorInt := func(i int) []byte {
-		buf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, uint32(i))
-		return buf
-	}
-
-	discriminator := []byte{4, 182, 83, 217, 232, 35, 33, 64}
-
-	data := make([]byte, 0)
-	data = append(data, discriminator...)
-
-	data = append(data, encodeAnchorString(uri)...)
-	data = append(data, encodeAnchorInt(user_id)...)
-	data = append(data, encodeAnchorInt(experiment_id)...)
-
-	return data
-}
-
 func encodeMintSparkCardInstanceData(uri string, user_id, experiment_id int) []byte {
 	encodeAnchorString := func(s string) []byte {
 		buf := make([]byte, 4+len(s))
@@ -1959,22 +1512,6 @@ func encodeMintSparkCardInstanceData(uri string, user_id, experiment_id int) []b
 	data = append(data, encodeAnchorString(uri)...)
 	data = append(data, encodeAnchorInt(user_id)...)
 	data = append(data, encodeAnchorInt(experiment_id)...)
-
-	return data
-}
-
-func encodeMintStoneInstructionData(user_id int) []byte {
-	encodeAnchorInt := func(i int) []byte {
-		buf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, uint32(i))
-		return buf
-	}
-
-	discriminator := []byte{3, 147, 97, 164, 139, 153, 105, 248}
-
-	data := make([]byte, 0)
-	data = append(data, discriminator...)
-	data = append(data, encodeAnchorInt(user_id)...)
 
 	return data
 }

@@ -46,6 +46,22 @@ export default function App() {
         }
     }, [ready, minTimeElapsed]);
 
+    const [displayLocation, setDisplayLocation] = useState(location);
+    const [transitionStage, setTransitionStage] = useState("fadeIn");
+
+    useEffect(() => {
+        if (location !== displayLocation) {
+            setTransitionStage("fadeOut");
+        }
+    }, [location, displayLocation]);
+
+    const handleAnimationEnd = () => {
+        if (transitionStage === "fadeOut") {
+            setTransitionStage("fadeIn");
+            setDisplayLocation(location);
+        }
+    };
+
     const { login } = useLogin({
         onComplete: (user, isNewUser) => {
             const performSync = async () => {
@@ -69,8 +85,8 @@ export default function App() {
     });
 
     const bgMap = {
-        "/library": "bg-orange-200",
-        "/shop": "bg-orange-200",
+        "/library": "bg-[#ddcfb7]",
+        "/shop": "bg-[#ddcfb7]",
         "/storage": "bg-black",
     };
 
@@ -79,8 +95,8 @@ export default function App() {
     if (showSplash) {
         return (
             <div
-                className={`flex flex-col bg-cover bg-bottom bg-no-repeat relative w-screen h-screen overflow-hidden font-plex py-6 ${bgClass} 
-                transition-opacity duration-300 ease-in-out ${isExiting ? "opacity-0" : "opacity-100"}`}
+                className={`flex flex-col bg-cover bg-bottom bg-no-repeat relative w-screen h-screen overflow-hidden font-plex py-6 bg-app 
+                transition-opacity duration-100 ease-in-out ${isExiting ? "opacity-0" : "opacity-100"}`}
             >
                 <Splash />
             </div>
@@ -89,7 +105,7 @@ export default function App() {
     if (!authenticated || !identityToken) {
         return (
             <div
-                className={`flex flex-col bg-cover bg-bottom bg-no-repeat relative w-screen h-screen overflow-hidden font-plex py-6 ${bgClass}`}
+                className={`flex flex-col bg-cover bg-bottom bg-no-repeat relative w-screen h-screen overflow-hidden font-plex py-6 bg-app`}
             >
                 <Signup login={login} />
             </div>
@@ -100,18 +116,13 @@ export default function App() {
 
     return (
         <div
-            className={`flex flex-col bg-cover bg-bottom bg-no-repeat relative min-w-80 w-screen h-screen overflow-hidden font-plex py-6 ${bgClass}`}
+            className={`transition-opacity duration-150 flex flex-col bg-cover bg-bottom bg-no-repeat relative min-w-80 w-screen h-screen overflow-hidden font-plex ${bgClass} transition-opacity duration-150 ${
+                transitionStage === "fadeIn" ? "opacity-100" : "opacity-0"
+            }`}
+            onTransitionEnd={handleAnimationEnd}
         >
-            {location.pathname !== "/welcome" && (
-                <div className="flex justify-between items-center w-full px-6">
-                    <Link className="text-xl" to="/">
-                        🌀
-                    </Link>
-                    {authenticated && <NavMenu />}
-                </div>
-            )}
-
-            <Routes>
+            {location.pathname !== "/welcome" && authenticated && <NavMenu />}
+            <Routes location={displayLocation}>
                 <Route path="/" element={<Home />} />
                 <Route path="/signup" element={<Signup />} />
                 <Route path="/lab" element={<Lab />} />

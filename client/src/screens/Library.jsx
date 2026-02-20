@@ -1,10 +1,15 @@
 import { useState, useEffect } from "react";
 import Card from "@components/Card";
 import Button from "@components/Button";
+import borderTopImg from "@images/border-top.png";
+import borderBottomImg from "@images/border-bottom.png";
+import cardfrontImg from "@images/card-front.png";
+import buttonActiveImg from "@images/button-active.png";
+import buttonDisabledImg from "@images/button-disabled.png";
 
 import api from "../api";
 
-import { RARITIES } from "../config.js";
+import { BIOMES, RARITIES } from "../config.js";
 
 const totalSlots = 9;
 
@@ -13,7 +18,6 @@ export default function Library() {
     const [monsters, setMonsters] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [loadedImages, setLoadedImages] = useState({});
     const [monsterDialog, setMonsterDialog] = useState(false);
 
     const [pagination, setPagination] = useState({
@@ -78,7 +82,13 @@ export default function Library() {
 
     return (
         <div className="flex-grow flex flex-col items-center">
-            <div className="w-full flex justify-between px-6 py-2">
+            <div className="w-full flex justify-between px-4 py-4">
+                <div className="flex flex-col">
+                    <h2 className="text-white font-bold text-xl">BORFcard Library</h2>
+                    <span className="text-xs">
+                        Total cards in collection: {String(pagination.total).padStart(3, "0")}
+                    </span>
+                </div>
                 <div className="relative">
                     <Button onClick={() => setOpenSort(!openSort)} label={"sort"} />
                     <div
@@ -103,15 +113,17 @@ export default function Library() {
                         })}
                     </div>
                 </div>
-                <div className="flex flex-col">
-                    <h2 className="text-white font-bold text-xl">BORFcard Library</h2>
-                    <span className="text-xs">
-                        Total cards in collection: {String(pagination.total).padStart(3, "0")}
-                    </span>
-                </div>
             </div>
-            <div className="w-full h-4 bg-gray-100 border-b-2 border-black shadow-md"></div>
-            <div className="w-full flex-grow bg-stone-800 px-6 py-2">
+            <div className="w-full h-4 border-b-2 border-black shadow-md">
+                <img src={borderTopImg} className={`h-full w-full object-cover`} />
+            </div>
+            <div
+                style={{
+                    backgroundBlendMode: "multiply",
+                    backgroundColor: "rgba(0,0,0,0.3)",
+                }}
+                className="w-full flex-grow bg-metal bg-cover  bg-center  bg-no-repeat px-4 py-4"
+            >
                 {monsterDialog ? (
                     <div className="flex relative items-center justify-center w-full h-full">
                         <button className="absolute top-0 right-0" onClick={() => setMonsterDialog(null)}>
@@ -120,54 +132,110 @@ export default function Library() {
                         <Card monster={monsterDialog} />
                     </div>
                 ) : (
-                    <div className="grid grid-cols-3 gap-x-4 gap-y-2 w-full h-full">
+                    <div className="grid grid-cols-3 gap-x-3 gap-y-2 w-full h-full">
                         {monsters.map((monster) => {
-                            const isLoaded = loadedImages[monster.SerialNumber];
+                            const { border, bg, text } = BIOMES[monster.Biome];
                             return (
                                 <div
                                     key={monster.SerialNumber}
                                     onClick={() => setMonsterDialog(monster)}
                                     className="flex flex-col gap-1 items-center uppercase text-xs"
                                 >
-                                    <div className="w-full aspect-[3/4] bg-gray-200 rounded-md overflow-hidden relative">
-                                        <img
-                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${monster.ImageCid}`}
-                                            alt={`specimen ${monster.SerialNumber}`}
-                                            className={`h-full w-full object-cover transition-opacity duration-500 ${
-                                                isLoaded ? "opacity-100" : "opacity-0"
-                                            }`}
-                                            onLoad={() =>
-                                                setLoadedImages((prev) => ({ ...prev, [monster.SerialNumber]: true }))
-                                            }
-                                        />
-                                        {!isLoaded && (
-                                            <div className="absolute inset-0 animate-pulse bg-gray-300"></div>
-                                        )}
+                                    <div className="w-full bg-foam border-gray-800 bg-cover shadow-[inset_6px_6px_8px_-2px_rgba(0,0,0,0.6)] bg-center  bg-no-repeat p-1.5  rounded-md overflow-hidden ">
+                                        <div
+                                            className={`relative w-full bg-gray-200 rounded-md inset-0 ${text} text-[2px] p-0.5`}
+                                        >
+                                            <img
+                                                className="absolute inset-0 w-full h-full"
+                                                src={cardfrontImg}
+                                                alt="card front"
+                                            />
+                                            <div className="relative pb-1.5 w-full h-full">
+                                                <div
+                                                    className={`flex flex-col w-full h-full rounded border-4 ${border} bg-orange-100`}
+                                                >
+                                                    <p className="uppercase text-center leading-tight">
+                                                        borflab // <strong>top secret</strong> // specimen
+                                                    </p>
+                                                    <hr className={`border-0 h-px ${bg}`} />
+                                                    <div className="flex-grow flex overflow-hidden p-px">
+                                                        <img
+                                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${monster.ImageCid}`}
+                                                            className="mr-auto ml-auto h-full object-cover"
+                                                            alt="output"
+                                                        />
+                                                    </div>
+                                                    <hr className={`border-0 h-px ${bg}`} />
+                                                    <div className="flex justify-between p-px">
+                                                        <h1 className="leading-none uppercase font-bold text-xs">
+                                                            {monster.Name}
+                                                        </h1>
+                                                    </div>
+                                                    <p
+                                                        className={`p-px leading-none text-xs font-bold text-orange-400 uppercas ${bg}`}
+                                                    >
+                                                        {monster.Biome}
+                                                    </p>
+                                                    <p className="leading-tight p-px">
+                                                        <strong className="uppercase">observation: </strong>
+                                                        {monster.Lore}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
-                                    <span className={`${RARITIES[monster.Rarity]}`}>{monster.Name}</span>
-                                    <span className="text-white">{monster.Biome}</span>
                                 </div>
                             );
                         })}
                     </div>
                 )}
             </div>
-            <div className="w-full h-4 bg-gray-100 shadow-md"></div>
-            <div className="flex gap-2 py-2 text-lg">
+            <div className="w-full h-4 border-b-2 border-black shadow-md">
+                <img src={borderBottomImg} className={`h-full w-full object-cover`} />
+            </div>
+            <div className="w-full px-4 flex gap-2 items-center justify-between py-4 text-lg">
                 <button
                     onClick={() => handlePageChange(pagination.page - 1)}
                     disabled={pagination.page <= 1 || loading}
+                    className="w-6 h-6 p-0 bg-transparent border-none "
                 >
-                    👈
+                    <img
+                        src={pagination.page <= 1 || loading ? buttonDisabledImg : buttonActiveImg}
+                        alt="Previous"
+                        className="w-full h-full object-contain transform"
+                    />
                 </button>
-                <div>
-                    {pagination.page} of {pagination.pages || 1}
+
+                <div className="text-white flex gap-0.5 items-center">
+                    {String(pagination.page)
+                        .padStart(2, "0")
+                        .split("")
+                        .map((digit, index) => (
+                            <div
+                                key={index}
+                                className="font-bold bg-gradient-to-b from-stone-900 via-stone-400 via-50% to-stone-900 px-2 py-3 rounded-lg text-2xl"
+                            >
+                                {digit}
+                            </div>
+                        ))}
+                    <div className="flex flex-col ml-2">
+                        <strong className="text-sm leading-tight font-bold uppercase">BORFOLIGICAL</strong>
+                        <span className="text-xs" leading-tight>
+                            specimen tray no.{" "}
+                        </span>
+                    </div>
                 </div>
+
                 <button
                     onClick={() => handlePageChange(pagination.page + 1)}
                     disabled={pagination.page >= pagination.pages || loading}
+                    className="w-6 h-6 p-0 bg-transparent border-none"
                 >
-                    👉
+                    <img
+                        src={pagination.page >= pagination.pages || loading ? buttonDisabledImg : buttonActiveImg}
+                        alt="Next"
+                        className="w-full h-full object-contain -scale-x-100"
+                    />
                 </button>
             </div>
         </div>

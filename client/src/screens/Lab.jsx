@@ -16,9 +16,9 @@ export default function Lab() {
     const next = () => setCurrent((p) => (p + 1) % slides.length);
 
     return (
-        <div className="flex-grow flex flex-col items-center overflow-hidden">
+        <div className="flex-grow flex flex-col items-center overflow-hidden py-4">
             <div
-                className="flex transition-transform duration-500 ease-in-out w-full h-full"
+                className="flex transition-transform duration-500 ease-in-out w-full"
                 style={{
                     transform: `translateX(-${current * 100}%)`,
                 }}

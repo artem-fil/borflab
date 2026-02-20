@@ -150,9 +150,9 @@ export default function Step1({ next, setSpecimen, stone, setStone }) {
     const isNextEnabled = preview && stone;
 
     return (
-        <div className="flex flex-col items-center h-full justify-between">
-            <div className="flex-1 flex items-center justify-center overflow-hidden">
-                <img src={posterImg} alt="poster" className="max-h-full max-w-full object-contain" />
+        <div className="flex flex-col items-center h-full">
+            <div className="flex items-center justify-center overflow-hidden">
+                <img src={posterImg} alt="poster" className="max-h-72 object-contain" />
             </div>
             <div
                 onClick={() => fileInputRef.current?.click()}

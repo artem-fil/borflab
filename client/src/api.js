@@ -101,6 +101,10 @@ export default {
         });
     },
 
+    async getMonster(id) {
+        return request(`/api/monsters/${id}`);
+    },
+
     async analyze(formData) {
         return request("/api/analyze", {
             method: "POST",

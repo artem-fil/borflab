@@ -147,6 +147,9 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
 
             mintSSERef.current = api.subscribeSSE(solanaWallet.address, {
                 onEvent: (event, data) => {
+                    if (event === "subscribed") {
+                        console.log("👌🏻 subscribed");
+                    }
                     if (event === "confirmed") {
                         setMintSuccess(true);
                         cleanupMint();
@@ -169,8 +172,6 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
                 userPubKey: solanaWallet.address,
                 stone: stone.Type,
             });
-
-            setIsMinting(false);
         } catch (err) {
             console.error("❌ Transaction failed:", err);
         }
@@ -364,17 +365,6 @@ export default function Step4({ specimen, stone, biome, analyzeResult, nextTask 
     `}</style>
                     </div>
                 </div>
-
-                {/* indicator */}
-                <div
-                    ref={printerIndicatorRef}
-                    className={`absolute z-10 aspect-square rounded-full ${done ? "" : "animate-pulse-button"}`}
-                    style={{
-                        top: "64.4%",
-                        left: "87.8%",
-                        width: "3%",
-                    }}
-                />
                 <img src={printerImg} alt="igniter" className="w-full h-auto object-contain" />
             </div>
             {minting &&

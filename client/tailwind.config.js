@@ -4,6 +4,8 @@ export default {
         extend: {
             backgroundImage: {
                 app: "url('/background.webp')",
+                metal: "url('/metal.jpeg')",
+                foam: "url('/foam.jpeg')",
             },
             fontFamily: {
                 plex: ['"IBM Plex Mono"', "monospace"],
