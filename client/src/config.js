@@ -22,6 +22,7 @@ export const STONES = {
         species: "stone sentinel",
         lore: "tbd",
         rarity: "epic",
+        color: "#fb923c",
         appearance:
             "The original creature’s shape is thickened and reinforced. Banded armor-like textures of earthy, vibrant natural tones swirl in gradients over limbs, like ancient sediment carved by time. Agate patterns form natural shields or defensive ridges.",
         personality:
@@ -34,6 +35,7 @@ export const STONES = {
         species: "deepwave oracle",
         lore: "tbd",
         rarity: "epic",
+        color: "#3b82f6",
         appearance:
             "Elegantly elongated, Sapphire monsters retain their base forms but take on fluid contours and wave-like movement. Edges glow in rich blue tones, like refracted ocean light, and extremities flicker with deep-sea shimmer.",
         personality:
@@ -46,6 +48,7 @@ export const STONES = {
         species: "heartfire catalyst",
         lore: "tbd",
         rarity: "epic",
+        color: "#ef4444",
         appearance:
             "Striking, glowing crimson veins and ember-hued eyes break through the creature’s original form. Protrusions pulse with inner fire. Retaining their native colors, these creatures seem backlit by a molten ruby glow.",
         personality:
@@ -58,6 +61,7 @@ export const STONES = {
         species: "base namibian",
         lore: "tbd",
         rarity: "common",
+        color: "#e2e8f0",
         appearance:
             "Quartz creatures retain their original biome-born shapes and natural coloration. Protrusions like horns in Quarts. Their surfaces shimmer faintly with pure clarity, acting like polished memory-glass—untainted, unaltered.",
         personality:
@@ -70,6 +74,7 @@ export const STONES = {
         species: "twilight wanderer",
         lore: "tbd",
         rarity: "rare",
+        color: "#2dd4bf",
         appearance:
             "With streaks of bright indigo-to-violet gradients washing over translucent fins or frills, Tanzanite-sparked creatures shimmer like dusk caught in motion. Body shapes stay true to the base form, but ripple with lightning-like flux and subtle flickers, as if barely anchored to the present.",
         personality:
@@ -82,6 +87,7 @@ export const STONES = {
         species: "verdant guardian",
         lore: "tbd",
         rarity: "legendary",
+        color: "#22c55e",
         appearance:
             "A grounded and majestic, elegant creature carved in Jade, standing tall and proud, with bold elements of original colors: ridges, horns, or limbs become lacquered and leaf-veined in Jade. ",
         personality:
@@ -94,6 +100,7 @@ export const STONES = {
         species: "skyfire seer",
         lore: "tbd",
         rarity: "mythic",
+        color: "#facc15",
         appearance:
             "Color: The creature glows from within with radiant,  yellow shades of sunlight. Form:  Its base shape develops mirror-like plates, prismatic crests, or solar spots. Eyes shine with bright awareness. ",
         personality:

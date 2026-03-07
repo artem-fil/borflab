@@ -1,52 +1,55 @@
 import { useState, useEffect, useRef } from "react";
-import poster3Img from "@images/poster03.png";
-import analyzerImg from "@images/analyzer.png";
-import labSound from "@sounds/lab.ogg";
-import api from "../api";
+import { createPortal } from "react-dom";
+import poster4Img from "@images/poster04.png";
+import printerImg from "@images/printer.png";
+import cardbackImg from "@images/card-back.png";
+import cardfrontImg from "@images/card-front.png";
+import printerSound from "@sounds/printer.ogg";
+import api from "../api.js";
+import { Link } from "react-router-dom";
+import { useWallets } from "@privy-io/react-auth/solana";
 
-export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, setNextTask }) {
-    const [displayed, setDisplayed] = useState("");
-    const [progress, setProgress] = useState(0);
-    const typingRef = useRef(false);
-    const monitorRef = useRef(null);
+import { STONES, BIOMES } from "../config.js";
+
+export default function Step3({ specimen, stone, biome, analyzeResult, nextTask }) {
+    const { wallets } = useWallets();
+    const [done, setDone] = useState(false);
+    const [minting, setIsMinting] = useState(false);
+    const [mintSuccess, setMintSuccess] = useState(false);
+    const [activeWallet, setActiveWallet] = useState(null);
+    const [mintError, setMintError] = useState(false);
+    const frontCardRef = useRef(null);
+    const backCardRef = useRef(null);
+    const printerIndicatorRef = useRef(null);
+    const outputImageRef = useRef(null);
     const sseRef = useRef(null);
-    const queueRef = useRef(Promise.resolve());
-    const audioRef = useRef(new Audio(labSound));
+    const mintSSERef = useRef(null);
+    const mintTimeoutRef = useRef(null);
+    const mintFinishedRef = useRef(false);
+    const [previewUrl, setPreviewUrl] = useState("");
+
+    const audioRef = useRef(new Audio(printerSound));
     audioRef.current.volume = 0.5;
 
     useEffect(() => {
-        if (!specimen || !biome || !stone) return;
-        startAnalyze();
-    }, [specimen, biome, stone]);
+        if (!wallets || wallets.length === 0) return;
+
+        const storedWallet = localStorage.getItem("primaryWallet");
+        const wallet = wallets.find((w) => w.address === storedWallet) || wallets[0];
+
+        setActiveWallet(wallet);
+    }, [wallets]);
 
     useEffect(() => {
-        const el = monitorRef.current;
-        if (el) {
-            el.scrollTop = el.scrollHeight;
-        }
-    }, [displayed]);
+        if (!nextTask) return;
+        subscribeGenerateProgress(nextTask);
+    }, [nextTask]);
 
-    async function startAnalyze() {
-        audioRef.current.play();
-        try {
-            const formData = new FormData();
-            formData.append("file", specimen, "specimen.jpg");
-            formData.append("biome", biome);
-            formData.append("stone", stone.Type);
-
-            const { Id } = await api.analyze(formData);
-
-            subscribeAnalyzeProgress(Id);
-        } catch (err) {
-            await appendTypedLine(`❌ ${err.message || err}`);
-            await appendTypedLine("Please, try again.");
-        }
-    }
-
-    function subscribeAnalyzeProgress(analyzeTaskId) {
+    function subscribeGenerateProgress(generateTaskId) {
+        setTimeout(() => {
+            audioRef.current.play();
+        }, 1500);
         const TIMEOUT_MS = 3 * 60 * 1000;
-        // localStep — это наш синхронный счетчик, чтобы не было дублей
-        let localStep = 0;
         let timeout = null;
 
         const clearAll = () => {
@@ -60,174 +63,343 @@ export default function Step3({ next, specimen, stone, biome, setAnalyzeResult, 
             sseRef.current = null;
         };
 
-        timeout = setTimeout(async () => {
+        timeout = setTimeout(() => {
             clearAll();
-            await appendTypedLine("⚠️ Analysis timeout: process terminated");
+            alert("⚠️ Analysis timeout. The creature refused to draw.");
         }, TIMEOUT_MS);
 
-        sseRef.current = api.subscribeSSE(analyzeTaskId, {
-            onEvent: (event, data) => {
-                // Убираем async здесь, нам важна синхронная обработка шагов
+        sseRef.current = api.subscribeSSE(generateTaskId, {
+            onEvent: async (event, data) => {
                 if (event === "progress") {
                     const { progress } = data;
-                    setProgress(progress);
 
-                    const targetStep = Math.floor(progress / 10);
-
-                    // СИНХРОННО закидываем сообщения в очередь, пока не дойдем до нужного шага
-                    while (localStep < targetStep && localStep < progressMessages.length) {
-                        const msg = progressMessages[localStep];
-
-                        // Мы не ждем здесь через await!
-                        // appendTypedLine сам ставит сообщения в очередь через queueRef.current
-                        appendTypedLine(msg);
-
-                        // Инкремент происходит МГНОВЕННО.
-                        // Если через 1мс прилетит новый эвент, localStep уже будет новым.
-                        localStep++;
+                    if (backCardRef.current) {
+                        backCardRef.current.style.bottom = `-${progress}%`;
                     }
                 }
 
                 if (event === "done") {
-                    setProgress(100);
                     clearAll();
 
-                    const { result, nextTask } = data;
-                    setAnalyzeResult(result);
-                    setNextTask(nextTask);
+                    const { image, experimentId } = data;
 
-                    appendTypedLine("Analysis complete!");
+                    setDone(true);
 
-                    // Ждем окончания печати всей очереди, прежде чем идти дальше
-                    queueRef.current.then(() => {
-                        setTimeout(next, 1500);
-                    });
+                    if (backCardRef.current) {
+                        backCardRef.current.style.bottom = `-100%`;
+                    }
+
+                    if (frontCardRef.current) {
+                        frontCardRef.current.style.bottom = `0`;
+                        frontCardRef.current.onclick = () => handleMintClick(experimentId);
+                    }
+
+                    if (printerIndicatorRef.current) {
+                        printerIndicatorRef.current.style.animation = "none";
+                    }
+
+                    if (outputImageRef.current) {
+                        outputImageRef.current.setAttribute("src", `data:image/png;base64,${image}`);
+                    }
                 }
 
                 if (event === "failed") {
-                    setProgress(100);
                     clearAll();
                     const { error } = data;
-                    appendTypedLine(`❌ ${error}`);
+                    alert(error);
                 }
             },
 
             onError: (err) => {
                 clearAll();
-                console.error(err);
-                appendTypedLine(`❌ Cannot subscribe SSE`);
-                appendTypedLine("Please, try again.");
+                console.error("SSE error", err);
             },
         });
     }
 
-    async function appendTypedLine(line = "") {
-        if (!line) return;
+    useEffect(() => {
+        if (!specimen) return;
 
-        // Цепляемся к хвосту очереди
-        queueRef.current = queueRef.current.then(async () => {
-            typingRef.current = true;
+        if (!(specimen instanceof Blob)) {
+            console.error("specimen is not a Blob:", specimen);
+            return;
+        }
 
-            // Печатаем строку посимвольно
-            for (let i = 0; i < line.length; i++) {
-                setDisplayed((prev) => prev + line[i]);
-                await new Promise((r) => setTimeout(r, 30));
-            }
+        const url = URL.createObjectURL(specimen);
+        setPreviewUrl(url);
 
-            // Добавляем перенос строки в конце
-            setDisplayed((prev) => prev + "\n");
-            typingRef.current = false;
-        });
+        return () => URL.revokeObjectURL(url);
+    }, [specimen]);
 
-        return queueRef.current;
+    async function handleMintClick(experimentId) {
+        if (minting) return;
+
+        try {
+            setIsMinting(true);
+            const storedWallet = localStorage.getItem("primaryWallet");
+            const solanaWallet = wallets.find((w) => w.address === storedWallet) || wallets[0];
+
+            mintTimeoutRef.current = setTimeout(() => {
+                console.warn("⏰ Mint SSE timeout");
+                mintSSERef.current?.close();
+                mintSSERef.current = null;
+            }, 60000);
+
+            mintSSERef.current = api.subscribeSSE(solanaWallet.address, {
+                onEvent: (event, data) => {
+                    if (event === "subscribed") {
+                        console.log("👌🏻 subscribed");
+                    }
+                    if (event === "confirmed") {
+                        setMintSuccess(true);
+                        cleanupMint();
+                        console.log("🎉 Mint successful!", data);
+                    }
+
+                    if (event === "failed") {
+                        setMintError(true);
+                        cleanupMint();
+                        console.error("❌ Mint failed", data);
+                    }
+                },
+
+                onError: () => {
+                    console.warn("⚠️ SSE temporarily disconnected, retrying...");
+                },
+            });
+
+            const { Signature } = await api.prepareMonsterMint(experimentId, {
+                userPubKey: solanaWallet.address,
+                stone: stone.Type,
+            });
+        } catch (err) {
+            console.error("❌ Transaction failed:", err);
+        }
     }
 
-    const progressMessages = [
-        "🔬 Adding quantum stabilizer ✅",
-        "🥬 Throwing in the bio-gel ✅",
-        "💨 Adjusting carbon regulators ✅",
-        "🐌 Feeding Ted to specimen ✅",
-        "🧪 Mixing neural reagents ✅",
-        "⚙️ Calibrating flux capacitors ✅",
-        "🧠 Stabilizing entropy field ✅",
-        "✨ Finalizing data output ✅",
-    ];
+    function cleanupMint() {
+        clearTimeout(mintTimeoutRef.current);
+        mintTimeoutRef.current = null;
+        mintSSERef.current?.close();
+        mintSSERef.current = null;
+        mintFinishedRef.current = true;
+    }
+
+    if (!biome) {
+        return;
+    }
+    if (!activeWallet) {
+        return <span>Loading wallets…</span>;
+    }
+    const { bg, text, border } = BIOMES[biome];
 
     return (
         <div className="flex flex-col h-full justify-end">
             <div className="flex-1 flex items-center justify-center overflow-hidden">
-                <img src={poster3Img} alt="poster" className="max-h-full max-w-full object-contain" />
+                <img src={poster4Img} alt="poster" className="max-h-full max-w-full object-contain" />
             </div>
 
             <div className="relative w-full">
-                {/* monitor */}
+                {/* printer tray */}
                 <div
-                    className="absolute text-xs text-lime-500 font-[monospace,emoji] leading-tight"
-                    style={{
-                        top: "16%",
-                        left: "12%",
-                        width: "67%",
-                        aspectRatio: "1 / 0.8",
-                    }}
+                    className="absolute z-10 overflow-hidden"
+                    style={{ bottom: "30%", left: "15%", width: "62%", aspectRatio: "0.62/1" }}
                 >
+                    {/* back card */}
                     <div
-                        className="absolute inset-0 pointer-events-none"
+                        ref={backCardRef}
+                        className={`w-full absolute ${text} text-xs p-1 transition-all ease-out`}
                         style={{
-                            background:
-                                "linear-gradient(180deg, rgba(0,255,0,0) 0%, rgba(0,255,0,0.8) 50%, rgba(0,255,0,0) 100%)",
-                            backgroundRepeat: "no-repeat",
-                            backgroundSize: "100% 6%",
-                            animation: "scan 2.5s linear infinite",
-                            mixBlendMode: "screen",
-                            opacity: 0.7,
+                            bottom: "0",
+                            transitionDuration: "2000ms",
+                            aspectRatio: "0.62 / 1",
+                            fontSize: "8px",
                         }}
-                    />
-                    <div ref={monitorRef} className="overflow-auto h-full">
-                        <p>BORFLAB 37.987-B</p>
-                        <p>Progress... {progress}%</p>
-                        <span className="whitespace-pre-wrap">{displayed}</span>
-                        <span className="animate-pulse">▋</span>
+                    >
+                        <img className="absolute inset-0 w-full h-full" src={cardbackImg} alt="card back" />
+                        <div className="relative p-0.5 pb-5 rounded-xl w-full h-full">
+                            <div
+                                className={`relative flex flex-col border-4 rounded-xl w-full outline-4 outline-orange-100 h-full ${border} bg-orange-100`}
+                            >
+                                <p className="p-1 leading-tight text-center">SPECIMEN ANALYSIS LOG // DEPT:006</p>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <div className="flex w-full items-center">
+                                    <div className="h-20 w-8/12 flex flex-col">
+                                        <img
+                                            src={previewUrl}
+                                            className="ml-auto mr-auto rounded h-full object-cover"
+                                            alt="input image"
+                                        />
+                                    </div>
+                                    <div className={`border-0 w-0.5 h-full ${bg}`} />
+                                    <div className="py-1 w-4/12 flex flex-col gap-1">
+                                        <img
+                                            src={STONES[stone?.Type]?.image}
+                                            className=" object-cover"
+                                            alt="borfstone"
+                                        />
+                                        <strong className="mx-1 text-center uppercase py-1 bg-red-800 text-white">
+                                            common
+                                        </strong>
+                                    </div>
+                                </div>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <p className="leading-tight px-1">
+                                    <strong className="uppercase">BORFOLOGIST ID: </strong>
+                                    {`# PSM-0000001-25/I`}
+                                </p>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <p className="leading-tight px-1">
+                                    <strong className="uppercase">spiral index: </strong>
+                                    {`[23/840K BORF’S][3/164.4K ${stone?.Type}][${biome}: 001]`}
+                                </p>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <p className="leading-tight px-1">
+                                    <strong className="uppercase">issue date: </strong>
+                                    {new Date().toLocaleDateString()}
+                                </p>
+                                <strong className={`py-0.5 ${bg} text-white uppercase`}>[borf profile]</strong>
+                                <p className="leading-tight px-1">
+                                    <strong className="uppercase">movement class:</strong>
+                                    {analyzeResult?.MONSTER_PROFILE?.movement_class}
+                                </p>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <p className="leading-tight px-1">
+                                    <strong className="uppercase">behaviour:</strong>
+                                    {analyzeResult?.MONSTER_PROFILE?.behaviour}
+                                </p>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <p className="leading-tight px-1">
+                                    <strong className="uppercase">personality:</strong>
+                                    {analyzeResult?.MONSTER_PROFILE?.personality}
+                                </p>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <p className="leading-tight px-1">
+                                    <strong className="uppercase">abilities:</strong>
+                                    {analyzeResult?.MONSTER_PROFILE?.abilities}
+                                </p>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <p className="leading-tight px-1">
+                                    <strong className="uppercase">habitat:</strong>
+                                    {analyzeResult?.MONSTER_PROFILE?.habitat}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* front card */}
+                    <div
+                        ref={frontCardRef}
+                        className={`w-full absolute ${text} text-xs p-1 transition-all ease-out`}
+                        style={{
+                            bottom: "-100%",
+                            transitionDuration: "2000ms",
+                            aspectRatio: "0.62 / 1",
+                            fontSize: "8px",
+                        }}
+                    >
+                        <img className="absolute inset-0 w-full h-full" src={cardfrontImg} alt="card front" />
+                        <div className="relative p-0.5 pb-5 w-full h-full">
+                            <div className={`flex flex-col w-full h-full rounded-xl border-4 ${border} bg-orange-100`}>
+                                <p className="uppercase text-center">
+                                    borflab // <strong>top secret</strong> // specimen
+                                </p>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <div className="flex-grow flex overflow-visible p-1 relative group">
+                                    <div className="absolute -top-4 -right-2 z-10 animate-bounce">
+                                        <div className="relative bg-white border-2 border-black px-2 py-1 rounded-lg shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                                            <span className="font-black text-[10px] text-black uppercase whitespace-nowrap">
+                                                Pet me right now!
+                                            </span>
+                                            <div className="absolute -bottom-2 left-4 w-3 h-3 bg-white border-b-2 border-r-2 border-black rotate-45"></div>
+                                        </div>
+                                    </div>
+                                    <img
+                                        ref={outputImageRef}
+                                        className="mr-auto ml-auto h-full object-cover cursor-pointer hover:scale-105 transition-transform"
+                                        alt="output"
+                                        style={{
+                                            animation: "shake 3s cubic-bezier(.36,.07,.19,.97) infinite",
+                                            transform: "translate3d(0, 0, 0)",
+                                            backfaceVisibility: "hidden",
+                                        }}
+                                    />
+                                </div>
+
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <div className="flex justify-between p-0.5">
+                                    <div className="flex flex-col justify-between">
+                                        <h1 className="leading-tight uppercase font-bold text-lg">
+                                            {analyzeResult?.MONSTER_PROFILE?.name}
+                                        </h1>
+                                        <p className="uppercase leading-tight text-sm">
+                                            species: <strong>{analyzeResult?.MONSTER_PROFILE?.species}</strong>
+                                        </p>
+                                    </div>
+                                    <div className={`border-2 ${border}`}>
+                                        <h1 className="px-0.5 text-lg font-bold text-center">I</h1>
+                                        <hr className={`border-0 h-0.5 ${bg}`} />
+                                        <span className="px-0.5">chapter</span>
+                                    </div>
+                                </div>
+                                <p className={`p-0.5 text-sm uppercase text-gray-100 ${bg}`}>
+                                    biome: <strong className="font-bold text-orange-400">{biome}</strong>
+                                </p>
+                                <p className="leading-tight px-0.5">
+                                    <strong className="uppercase">observation: </strong>
+                                    {analyzeResult?.MONSTER_PROFILE?.lore}
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Определение анимации shake в inline style, чтобы не лезть в CSS файлы */}
+                        <style>{`
+        @keyframes shake {
+            0%, 70%, 100% { transform: translate(0, 0) rotate(0); }
+            75% { transform: translate(-1px, 1px) rotate(-1deg); }
+            80% { transform: translate(-2px, -1px) rotate(1deg); }
+            85% { transform: translate(2px, 1px) rotate(-1deg); }
+            90% { transform: translate(1px, -1px) rotate(1deg); }
+            95% { transform: translate(-1px, 2px) rotate(0); }
+        }
+    `}</style>
                     </div>
                 </div>
-                {/* indicators */}
-                <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 10 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "61.3%", left: "89.5%", width: "3%" }}
-                />
-                <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 20 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "56.1%", left: "89.5%", width: "3%" }}
-                />
-                <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 30 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "50.5%", left: "89.5%", width: "3%" }}
-                />
-                <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 40 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "45.3%", left: "89.5%", width: "3%" }}
-                />
-                <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 50 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "40.5%", left: "89.5%", width: "3%" }}
-                />
-                <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 60 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "35.1%", left: "89.5%", width: "3%" }}
-                />
-                <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 70 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "29.5%", left: "89.5%", width: "3%" }}
-                />
-                <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress > 80 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "24.2%", left: "89.5%", width: "3%" }}
-                />
-                <div
-                    className={`absolute z-10 aspect-square rounded-full ${progress >= 100 ? "bg-green-500/50" : ""}`}
-                    style={{ top: "19%", left: "89.5%", width: "3%" }}
-                />
-                <img src={analyzerImg} alt="analyzer" className="w-full h-auto object-contain" />
+                <img src={printerImg} alt="igniter" className="w-full h-auto object-contain" />
             </div>
+            {minting &&
+                createPortal(
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+                        {mintFinishedRef.current ? (
+                            <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
+                                {mintSuccess && (
+                                    <div className="flex flex-col items-center">
+                                        <span className="text-green-400 font-bold">🥳 Minted successfully!</span>
+                                        <Link to={`/library`}>Check monster 👉</Link>
+                                    </div>
+                                )}
+                                {mintError && <div className="text-red-400 font-bold">😖 Mint failed!</div>}
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
+                                <svg
+                                    className="animate-spin h-10 w-10 mb-4 text-white"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        className="opacity-75"
+                                        fill="currentColor"
+                                        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                                    />
+                                </svg>
+                                <span>Minting...</span>
+                            </div>
+                        )}
+                    </div>,
+                    document.body
+                )}
         </div>
     );
 }

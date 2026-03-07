@@ -160,10 +160,12 @@ export default {
 
         const handler = (event) => {
             try {
-                const data = event.data ? JSON.parse(event.data) : null;
+                if (!event.data) return;
+
+                const data = JSON.parse(event.data);
                 onEvent?.(event.type, data);
             } catch (e) {
-                console.error("SSE parse error", e);
+                console.error("SSE parse error", e, event.data);
             }
         };
 
@@ -173,13 +175,17 @@ export default {
         es.addEventListener("done", handler);
 
         es.onerror = (err) => {
-            console.error("SSE error", err);
-            onError?.(err);
-            es.close();
+            if (es.readyState === EventSource.CLOSED) {
+                console.error("SSE Connection closed permanently", err);
+                onError?.(err);
+            }
         };
 
         return {
-            close: () => es.close(),
+            close: () => {
+                console.log("SSE manually closed");
+                es.close();
+            },
         };
     },
 };

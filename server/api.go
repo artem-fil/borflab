@@ -523,8 +523,18 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 }
 
 func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experiment) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	// Создаем контекст с запасом. Если OpenAI будет тупить, у нас есть 2 минуты.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+
+	// 1. Защита от паники: если что-то пойдет не так, фронт получит внятный Error
+	defer func() {
+		if r := recover(); r != nil {
+			errStr := fmt.Sprintf("LAB FATAL ERROR: %v", r)
+			LogError("API", "Panic recovery in processImage", fmt.Errorf("%v", r))
+			a.sseAgent.Emit(taskId, "failed", map[string]any{"error": errStr})
+		}
+	}()
 
 	ts := &TaskStatus{
 		Progress: 0,
@@ -532,22 +542,36 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	}
 	tasks.Store(taskId, ts)
 
-	time.AfterFunc(5*time.Minute, func() {
+	// Чистим память через 10 минут
+	time.AfterFunc(10*time.Minute, func() {
 		tasks.Delete(taskId)
 	})
 
 	fail := func(msg string, err error) {
 		LogError("API", msg, err)
+		// Обязательно отменяем контекст симуляции прогресса
 		cancel()
 		a.sseAgent.Emit(taskId, "failed", map[string]any{"error": msg})
 		ts.Progress = 100
 		ts.Done = true
 	}
-	go a.simulateProgress(ctx, 1, 99, 20*time.Second, func(progress int) {
+
+	// Запускаем симуляцию прогресса в фоне
+	go a.simulateProgress(ctx, 1, 99, 25*time.Second, func(progress int) {
 		ts.Progress = progress
 		a.sseAgent.Emit(taskId, "progress", map[string]any{"progress": progress})
 	})
-	prompt := fmt.Sprintf(Prompts.PromptAnalyze[experiment.Biome], Prompts.PromptStone[experiment.Stone])
+
+	// Проверяем наличие промптов, чтобы не поймать panic на пустом месте
+	biomePrompt, ok1 := Prompts.PromptAnalyze[experiment.Biome]
+	stonePrompt, ok2 := Prompts.PromptStone[experiment.Stone]
+	if !ok1 || !ok2 {
+		fail("Laboratory database error: missing prompts for biome or stone", nil)
+		return
+	}
+
+	prompt := fmt.Sprintf(biomePrompt, stonePrompt)
+
 	requestBody := map[string]any{
 		"model": "gpt-5.2-chat-latest",
 		"messages": []map[string]any{
@@ -578,9 +602,10 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		},
 		"max_completion_tokens": 1000,
 	}
+
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
-		fail("cannot marshal json", err)
+		fail("Internal error: cannot marshal request", err)
 		return
 	}
 
@@ -591,27 +616,28 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		bytes.NewReader(bodyBytes),
 	)
 	if err != nil {
-		fail("cannot create request", err)
+		fail("Internal error: cannot create request", err)
 		return
 	}
+
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.cfg.OpenAIToken)
 
+	// Увеличиваем таймаут клиента, чтобы соответствовал контексту
 	client := &http.Client{
-		Timeout: 60 * time.Second,
+		Timeout: 100 * time.Second,
 	}
 
 	resp, err := client.Do(req)
-
 	if err != nil {
-		fail("cannot make external request", err)
+		fail("Laboratory connection lost: OpenAI unreachable", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fail("cannot read OpenAI response body", err)
+		fail("Failed to read laboratory report", err)
 		return
 	}
 
@@ -619,6 +645,7 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		fail(fmt.Sprintf("OpenAI API refused: %d", resp.StatusCode), nil)
 		return
 	}
+
 	var rawResp struct {
 		Choices []struct {
 			Message struct {
@@ -626,46 +653,57 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 			} `json:"message"`
 		} `json:"choices"`
 	}
+
 	if err := json.Unmarshal(respBody, &rawResp); err != nil || len(rawResp.Choices) == 0 {
-		fail("invalid OpenAI response", err)
+		fail("Laboratory analyzer returned corrupted data", err)
 		return
 	}
+
 	content := rawResp.Choices[0].Message.Content
 	sanitizedJson, err := sanitizeJSON(content)
 	if err != nil {
-		fail(content, err)
+		// Если пришел не JSON, отправляем сырой текст как ошибку
+		fail(fmt.Sprintf("Raw analysis result: %s", content), err)
 		return
 	}
 
 	var parsed map[string]any
 	if err := json.Unmarshal(sanitizedJson, &parsed); err != nil {
-		fail("invalid JSON result", err)
+		fail("Failed to parse specimen data", err)
 		return
 	}
 
+	// Если в самом JSON от модели пришла ошибка
 	if maybeError, hasError := parsed["Error"]; hasError {
 		fail(fmt.Sprint(maybeError), nil)
 		return
 	}
 
+	// Успешное завершение
 	analyzed := time.Now().UTC()
 	experiment.Specimen = sanitizedJson
 	experiment.Analyzed = &analyzed
 
+	// Сохраняем в БД
 	if _, err := a.db.AnalyzeExperiment(context.Background(), experiment); err != nil {
-		fail("cannot continue experiment", err)
+		fail("Database failed to record specimen", err)
 		return
 	}
 
+	// Генерируем ID для следующего этапа (генерация картинки)
 	nextTaskId := uuid.NewString()
 	tasks.Store(nextTaskId, &TaskStatus{Progress: 0, Done: false})
 
+	// Запускаем следующий этап в фоне
 	go a.generateImage(nextTaskId, parsed, *experiment)
 
+	// Финализируем текущую задачу
 	ts.Progress = 100
 	ts.Done = true
 	ts.Result = parsed
 	ts.NextTaskId = nextTaskId
+
+	// Рапортуем на фронт
 	a.sseAgent.Emit(taskId, "done", map[string]any{
 		"result":   parsed,
 		"nextTask": nextTaskId,
@@ -1447,11 +1485,13 @@ func (a *api) SubscribeSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "key required", http.StatusBadRequest)
 		return
 	}
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
@@ -1462,6 +1502,9 @@ func (a *api) SubscribeSSE(w http.ResponseWriter, r *http.Request) {
 	defer a.sseAgent.Unsubscribe(sub)
 
 	ctx := r.Context()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
 
 	sendSSE := func(event string, payload any) {
 		data, err := json.Marshal(payload)
@@ -1482,6 +1525,10 @@ func (a *api) SubscribeSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		case msg := <-sub.conn:
 			sendSSE(msg.Event, msg.Data)
+
+		case <-heartbeat.C:
+			fmt.Fprintf(w, ": heartbeat\n\n")
+			flusher.Flush()
 		}
 	}
 }

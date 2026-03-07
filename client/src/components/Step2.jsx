@@ -1,108 +1,226 @@
-import { useState, useRef } from "react";
-import poster2Img from "@images/poster02.png";
-import designatorImg from "@images/designator.png";
-import clickSound from "@sounds/click.ogg";
+import { useState, useEffect, useRef } from "react";
+import poster3Img from "@images/poster03.png";
+import analyzerImg from "@images/analyzer.png";
+import labSound from "@sounds/lab.ogg";
+import api from "../api";
 
-export default function Step2({ next, setBiome }) {
-    const [selectedBiome, setSelectedBiome] = useState(null);
+export default function Step2({ current, next, specimen, stone, biome, setAnalyzeResult, setNextTask }) {
+    const [displayed, setDisplayed] = useState("");
+    const [progress, setProgress] = useState(0);
+    const typingRef = useRef(false);
+    const monitorRef = useRef(null);
+    const sseRef = useRef(null);
+    const queueRef = useRef(Promise.resolve());
+    const audioRef = useRef(new Audio(labSound));
+    const hasStarted = useRef(false);
 
-    const audioRef = useRef(new Audio(clickSound));
     audioRef.current.volume = 0.5;
 
-    const canSubmit = !!selectedBiome;
+    useEffect(() => {
+        if (current === 1 && !hasStarted.current) {
+            if (!specimen || !biome || !stone) {
+                throw new Error("Required analysis data is missing on Step 2");
+            }
 
-    const handleSubmit = () => {
-        if (canSubmit) {
-            setBiome(selectedBiome);
-            next();
+            hasStarted.current = true;
+            startAnalyze();
         }
-    };
+    }, [current, specimen, biome, stone]);
+
+    useEffect(() => {
+        const el = monitorRef.current;
+        if (el) {
+            el.scrollTop = el.scrollHeight;
+        }
+    }, [displayed]);
+
+    async function startAnalyze() {
+        audioRef.current.play();
+        try {
+            const formData = new FormData();
+            formData.append("file", specimen, "specimen.jpg");
+            formData.append("biome", biome);
+            formData.append("stone", stone.Type);
+
+            const { Id } = await api.analyze(formData);
+
+            subscribeAnalyzeProgress(Id);
+        } catch (err) {
+            await appendTypedLine(`❌ ${err.message || err}`);
+            await appendTypedLine("Please, try again.");
+        }
+    }
+
+    function subscribeAnalyzeProgress(analyzeTaskId) {
+        const TIMEOUT_MS = 3 * 60 * 1000;
+        let localStep = 0;
+        let timeout = null;
+
+        const clearAll = () => {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+            if (timeout) {
+                clearTimeout(timeout);
+                timeout = null;
+            }
+            sseRef.current?.close();
+            sseRef.current = null;
+        };
+
+        timeout = setTimeout(async () => {
+            clearAll();
+            await appendTypedLine("⚠️ Analysis timeout: process terminated");
+        }, TIMEOUT_MS);
+
+        sseRef.current = api.subscribeSSE(analyzeTaskId, {
+            onEvent: (event, data) => {
+                if (event === "progress") {
+                    const { progress } = data;
+                    setProgress(progress);
+
+                    const targetStep = Math.floor(progress / 10);
+                    while (localStep < targetStep && localStep < progressMessages.length) {
+                        const msg = progressMessages[localStep];
+                        appendTypedLine(msg);
+                        localStep++;
+                    }
+                }
+
+                if (event === "done") {
+                    setProgress(100);
+                    clearAll();
+
+                    const { result, nextTask } = data;
+                    setAnalyzeResult(result);
+                    setNextTask(nextTask);
+
+                    appendTypedLine("Analysis complete!");
+
+                    queueRef.current.then(() => {
+                        setTimeout(next, 1500);
+                    });
+                }
+
+                if (event === "failed") {
+                    setProgress(100);
+                    clearAll();
+                    const { error } = data;
+                    appendTypedLine(`❌ ${error}`);
+                }
+            },
+
+            onError: (err) => {
+                clearAll();
+                console.error(err);
+                appendTypedLine(`❌ Cannot subscribe SSE`);
+                appendTypedLine("Please, try again.");
+            },
+        });
+    }
+
+    async function appendTypedLine(line = "") {
+        if (!line) return;
+
+        queueRef.current = queueRef.current.then(async () => {
+            typingRef.current = true;
+
+            for (let i = 0; i < line.length; i++) {
+                setDisplayed((prev) => prev + line[i]);
+                await new Promise((r) => setTimeout(r, 30));
+            }
+
+            setDisplayed((prev) => prev + "\n");
+            typingRef.current = false;
+        });
+
+        return queueRef.current;
+    }
+
+    const progressMessages = [
+        "🔬 Adding quantum stabilizer ✅",
+        "🥬 Throwing in the bio-gel ✅",
+        "💨 Adjusting carbon regulators ✅",
+        "🐌 Feeding Ted to specimen ✅",
+        "🧪 Mixing neural reagents ✅",
+        "⚙️ Calibrating flux capacitors ✅",
+        "🧠 Stabilizing entropy field ✅",
+        "✨ Finalizing data output ✅",
+    ];
 
     return (
         <div className="flex flex-col h-full justify-end">
             <div className="flex-1 flex items-center justify-center overflow-hidden">
-                <img src={poster2Img} alt="poster" className="max-h-full max-w-full object-contain" />
+                <img src={poster3Img} alt="poster" className="max-h-full max-w-full object-contain" />
             </div>
 
-            <div className="relative w-full text-sm">
-                {/* amazonia */}
-                <button
-                    type="button"
-                    onClick={() => {
-                        audioRef.current.play();
-                        setSelectedBiome("amazonia");
+            <div className="relative w-full">
+                {/* monitor */}
+                <div
+                    className="absolute text-xs text-lime-500 font-[monospace,emoji] leading-tight"
+                    style={{
+                        top: "16%",
+                        left: "12%",
+                        width: "67%",
+                        aspectRatio: "1 / 0.8",
                     }}
-                    aria-pressed={selectedBiome === "amazonia"}
-                    className={`absolute cursor-pointer
-            ${selectedBiome === "amazonia" ? "text-green-500" : ""}`}
-                    style={{ top: "20%", left: "7%", width: "25%", height: "12%" }}
                 >
-                    amazonia
-                </button>
-                {/* plushland */}
-                <button
-                    type="button"
-                    onClick={() => {
-                        audioRef.current.play();
-                        setSelectedBiome("plushland");
-                    }}
-                    aria-pressed={selectedBiome === "plushland"}
-                    className={`absolute cursor-pointer
-            ${selectedBiome === "plushland" ? "text-purple-500" : ""}`}
-                    style={{ top: "38%", left: "7%", width: "25%", height: "12%" }}
-                >
-                    plushland
-                </button>
-                <button
-                    type="button"
-                    onClick={() => {
-                        audioRef.current.play();
-                        setSelectedBiome("coralux");
-                    }}
-                    aria-pressed={selectedBiome === "coralux"}
-                    className={`absolute cursor-pointer
-            ${selectedBiome === "coralux" ? "text-cyan-500" : ""}`}
-                    style={{ top: "20%", left: "38%", width: "25%", height: "12%" }}
-                >
-                    coralux
-                </button>
-                <button
-                    type="button"
-                    className={`absolute text-gray-500 cursor-not-allowed`}
-                    style={{ top: "38%", left: "38%", width: "25%", height: "12%" }}
-                >
-                    unknown
-                </button>
-                <button
-                    type="button"
-                    className={`absolute text-gray-500 cursor-not-allowed`}
-                    style={{ top: "20%", left: "68%", width: "25%", height: "12%" }}
-                >
-                    unknown
-                </button>
-                <button
-                    type="button"
-                    className={`absolute text-gray-500 cursor-not-allowed`}
-                    style={{ top: "38%", left: "68%", width: "25%", height: "12%" }}
-                >
-                    unknown
-                </button>
-                {/* submit */}
-                <button
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit}
-                    aria-disabled={!canSubmit}
-                    className={`rounded-full aspect-square absolute
-            ${canSubmit ? "animate-pulse-button" : " cursor-not-allowed"}`}
-                    style={{ top: "56.5%", left: "82.5%", width: "13%" }}
+                    <div
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                            background:
+                                "linear-gradient(180deg, rgba(0,255,0,0) 0%, rgba(0,255,0,0.8) 50%, rgba(0,255,0,0) 100%)",
+                            backgroundRepeat: "no-repeat",
+                            backgroundSize: "100% 6%",
+                            animation: "scan 2.5s linear infinite",
+                            mixBlendMode: "screen",
+                            opacity: 0.7,
+                        }}
+                    />
+                    <div ref={monitorRef} className="overflow-auto h-full">
+                        <p>BORFLAB 37.987-B</p>
+                        <p>Progress... {progress}%</p>
+                        <span className="whitespace-pre-wrap">{displayed}</span>
+                        <span className="animate-pulse">▋</span>
+                    </div>
+                </div>
+                {/* indicators */}
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 10 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "61.3%", left: "89.5%", width: "3%" }}
                 />
-
-                <img
-                    src={designatorImg}
-                    alt="designator"
-                    className="w-full h-auto object-contain pointer-events-none select-none z-0"
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 20 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "56.1%", left: "89.5%", width: "3%" }}
                 />
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 30 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "50.5%", left: "89.5%", width: "3%" }}
+                />
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 40 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "45.3%", left: "89.5%", width: "3%" }}
+                />
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 50 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "40.5%", left: "89.5%", width: "3%" }}
+                />
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 60 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "35.1%", left: "89.5%", width: "3%" }}
+                />
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 70 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "29.5%", left: "89.5%", width: "3%" }}
+                />
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress > 80 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "24.2%", left: "89.5%", width: "3%" }}
+                />
+                <div
+                    className={`absolute z-10 aspect-square rounded-full ${progress >= 100 ? "bg-green-500/50" : ""}`}
+                    style={{ top: "19%", left: "89.5%", width: "3%" }}
+                />
+                <img src={analyzerImg} alt="analyzer" className="w-full h-auto object-contain" />
             </div>
         </div>
     );
