@@ -1,10 +1,9 @@
-import React, { useState } from "react";
 import Step1 from "@components/Step1";
 import Step2 from "@components/Step2";
-import Step3 from "@components/Step3";
+import { useState } from "react";
 
 export default function Lab() {
-    const slides = [Step1, Step2, Step3];
+    const slides = [Step1, Step2];
     const [current, setCurrent] = useState(0);
     const [specimen, setSpecimen] = useState(null);
     const [stone, setStone] = useState(null);

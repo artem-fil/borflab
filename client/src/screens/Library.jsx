@@ -1,15 +1,15 @@
-import { useState, useEffect } from "react";
-import Card from "@components/Card";
 import Button from "@components/Button";
-import borderTopImg from "@images/border-top.png";
+import Card from "@components/Card";
 import borderBottomImg from "@images/border-bottom.png";
-import cardfrontImg from "@images/card-front.png";
+import borderTopImg from "@images/border-top.png";
 import buttonActiveImg from "@images/button-active.png";
 import buttonDisabledImg from "@images/button-disabled.png";
+import cardfrontImg from "@images/card-front.png";
+import { useEffect, useState } from "react";
 
 import api from "../api";
 
-import { BIOMES, RARITIES } from "../config.js";
+import { BIOMES } from "../config.js";
 
 const totalSlots = 9;
 
@@ -90,7 +90,10 @@ export default function Library() {
                     </span>
                 </div>
                 <div className="relative">
-                    <Button onClick={() => setOpenSort(!openSort)} label={"sort"} />
+                    <Button
+                        onClick={monsterDialog ? () => setMonsterDialog(null) : () => setOpenSort(!openSort)}
+                        label={monsterDialog ? "close" : "sort"}
+                    />
                     <div
                         className={` absolute top-full right-0 flex flex-col items-end text-white bg-black/90 rounded-md uppercase transform transition-all duration-300 origin-top-right z-10 ${
                             openSort ? "scale-y-100 opacity-100" : "scale-y-0 opacity-0"
@@ -125,10 +128,7 @@ export default function Library() {
                 className="w-full flex-grow bg-metal bg-cover  bg-center  bg-no-repeat px-4 py-4"
             >
                 {monsterDialog ? (
-                    <div className="flex relative items-center justify-center w-full h-full">
-                        <button className="absolute top-0 right-0" onClick={() => setMonsterDialog(null)}>
-                            ❌
-                        </button>
+                    <div className="flex items-center justify-center w-full h-full">
                         <Card monster={monsterDialog} />
                     </div>
                 ) : (

@@ -523,11 +523,10 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 }
 
 func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experiment) {
-	// Создаем контекст с запасом. Если OpenAI будет тупить, у нас есть 2 минуты.
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// 1. Защита от паники: если что-то пойдет не так, фронт получит внятный Error
 	defer func() {
 		if r := recover(); r != nil {
 			errStr := fmt.Sprintf("LAB FATAL ERROR: %v", r)
@@ -542,27 +541,23 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	}
 	tasks.Store(taskId, ts)
 
-	// Чистим память через 10 минут
 	time.AfterFunc(10*time.Minute, func() {
 		tasks.Delete(taskId)
 	})
 
 	fail := func(msg string, err error) {
 		LogError("API", msg, err)
-		// Обязательно отменяем контекст симуляции прогресса
 		cancel()
 		a.sseAgent.Emit(taskId, "failed", map[string]any{"error": msg})
 		ts.Progress = 100
 		ts.Done = true
 	}
 
-	// Запускаем симуляцию прогресса в фоне
 	go a.simulateProgress(ctx, 1, 99, 25*time.Second, func(progress int) {
 		ts.Progress = progress
 		a.sseAgent.Emit(taskId, "progress", map[string]any{"progress": progress})
 	})
 
-	// Проверяем наличие промптов, чтобы не поймать panic на пустом месте
 	biomePrompt, ok1 := Prompts.PromptAnalyze[experiment.Biome]
 	stonePrompt, ok2 := Prompts.PromptStone[experiment.Stone]
 	if !ok1 || !ok2 {
@@ -623,7 +618,6 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.cfg.OpenAIToken)
 
-	// Увеличиваем таймаут клиента, чтобы соответствовал контексту
 	client := &http.Client{
 		Timeout: 100 * time.Second,
 	}
@@ -642,7 +636,7 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		fail(fmt.Sprintf("OpenAI API refused: %d", resp.StatusCode), nil)
+		fail(fmt.Sprintf("OpenAI API refused: %d. Response: %s", resp.StatusCode, string(respBody)), nil)
 		return
 	}
 
