@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	OPENAI_COMPLETION_URL     = "https://api.openai.com/v1/chat/completions"
+	OPENAI_COMPLETION_URL = "https://api.openai.com/v1/responses"
 	OPENAI_GENERATION_URL     = "https://api.openai.com/v1/images/generations"
 	PINATA_PIN_FILE_URL       = "https://api.pinata.cloud/pinning/pinFileToIPFS"
 	TOKEN_METADATA_PROGRAM_ID = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
@@ -478,7 +478,7 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		return
 	}
 
-	resizedImg, err := resizeAndConvert(bytes.NewReader(imgBytes), 2000)
+	resizedImg, err := resizeAndConvert(bytes.NewReader(imgBytes), 1024)
 	if err != nil {
 		a.InternalError(w, err)
 		return
@@ -559,7 +559,7 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	})
 
 	biomePrompt, ok1 := Prompts.PromptAnalyze[experiment.Biome]
-	stonePrompt, ok2 := Prompts.PromptStone[experiment.Stone]
+	stonePrompt, ok2 := Prompts.PromptStone[experiment.Stone][experiment.Biome]
 	if !ok1 || !ok2 {
 		fail("Laboratory database error: missing prompts for biome or stone", nil)
 		return
@@ -568,34 +568,40 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	prompt := fmt.Sprintf(biomePrompt, stonePrompt)
 
 	requestBody := map[string]any{
-		"model": "gpt-5.2-chat-latest",
-		"messages": []map[string]any{
-			{
+		"model": "gpt-5.2",
+		"reasoning": map[string]any{
+			"effort": "low",
+		},
+		"max_output_tokens": 2048,
+		"text": map[string]any{
+			"format": map[string]any{
+				"type": "json_object",
+			},
+		},
+		"input": []any{
+			map[string]any{
 				"role": "system",
-				"content": []any{
-					map[string]any{
-						"type": "text",
+				"content": []map[string]any{
+					{
+						"type": "input_text",
 						"text": prompt,
 					},
 				},
 			},
-			{
+			map[string]any{
 				"role": "user",
-				"content": []any{
-					map[string]any{
-						"type": "text",
+				"content": []map[string]any{
+					{
+						"type": "input_text",
 						"text": "Here's an image",
 					},
-					map[string]any{
-						"type": "image_url",
-						"image_url": map[string]any{
-							"url": "data:image/jpeg;base64," + encodeToBase64(imgBytes),
-						},
+					{
+						"type": "input_image",
+						"image_url": "data:image/jpeg;base64," + encodeToBase64(imgBytes),
 					},
 				},
 			},
 		},
-		"max_completion_tokens": 1000,
 	}
 
 	bodyBytes, err := json.Marshal(requestBody)
@@ -641,23 +647,42 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	}
 
 	var rawResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+		Output []struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
 	}
 
-	if err := json.Unmarshal(respBody, &rawResp); err != nil || len(rawResp.Choices) == 0 {
+	if err = json.Unmarshal(respBody, &rawResp); err != nil || len(rawResp.Output) == 0 {
+		fmt.Printf("\nRaw Body: %s\n", string(respBody))
 		fail("Laboratory analyzer returned corrupted data", err)
 		return
 	}
 
-	content := rawResp.Choices[0].Message.Content
+	var content string
+	for _, out := range rawResp.Output {
+		for _, c := range out.Content {
+			if c.Type == "output_text" {
+				content += c.Text
+			}
+		}
+	}
+
+	if content == "" {
+		fmt.Printf("\n--- EMPTY OUTPUT ---\nRaw Body: %s\n", string(respBody))
+		fail("Laboratory analyzer returned empty output", nil)
+		return
+	}
+
 	sanitizedJson, err := sanitizeJSON(content)
 	if err != nil {
-		// Если пришел не JSON, отправляем сырой текст как ошибку
-		fail(fmt.Sprintf("Raw analysis result: %s", content), err)
+		fmt.Println("----------------- LLM RESPONSE DEBUG -----------------")
+		fmt.Printf("Raw Body: %v\n", string(respBody))
+		fmt.Printf("Raw Content: %q\n", content)
+		fmt.Printf("Sanitization Error: %v\n", err)
+		fail(fmt.Sprintf("Cannot parse analyze report. Raw result: %v", content), err)
 		return
 	}
 
@@ -667,37 +692,30 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		return
 	}
 
-	// Если в самом JSON от модели пришла ошибка
 	if maybeError, hasError := parsed["Error"]; hasError {
 		fail(fmt.Sprint(maybeError), nil)
 		return
 	}
 
-	// Успешное завершение
 	analyzed := time.Now().UTC()
 	experiment.Specimen = sanitizedJson
 	experiment.Analyzed = &analyzed
 
-	// Сохраняем в БД
 	if _, err := a.db.AnalyzeExperiment(context.Background(), experiment); err != nil {
 		fail("Database failed to record specimen", err)
 		return
 	}
 
-	// Генерируем ID для следующего этапа (генерация картинки)
 	nextTaskId := uuid.NewString()
 	tasks.Store(nextTaskId, &TaskStatus{Progress: 0, Done: false})
 
-	// Запускаем следующий этап в фоне
 	go a.generateImage(nextTaskId, parsed, *experiment)
 
-	// Финализируем текущую задачу
 	ts.Progress = 100
 	ts.Done = true
 	ts.Result = parsed
 	ts.NextTaskId = nextTaskId
 
-	// Рапортуем на фронт
 	a.sseAgent.Emit(taskId, "done", map[string]any{
 		"result":   parsed,
 		"nextTask": nextTaskId,

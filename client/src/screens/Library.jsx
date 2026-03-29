@@ -4,7 +4,7 @@ import borderBottomImg from "@images/border-bottom.png";
 import borderTopImg from "@images/border-top.png";
 import buttonActiveImg from "@images/button-active.png";
 import buttonDisabledImg from "@images/button-disabled.png";
-import cardfrontImg from "@images/card-front.png";
+import slotImg from "@images/slot.png";
 import { useEffect, useState } from "react";
 
 import api from "../api";
@@ -134,56 +134,36 @@ export default function Library() {
                 ) : (
                     <div className="grid grid-cols-3 gap-x-3 gap-y-2 w-full h-full">
                         {monsters.map((monster) => {
-                            const { border, bg, text } = BIOMES[monster.Biome];
+                            const { bg } = BIOMES[monster.Biome];
                             return (
                                 <div
                                     key={monster.SerialNumber}
                                     onClick={() => setMonsterDialog(monster)}
                                     className="flex flex-col gap-1 items-center uppercase text-xs"
                                 >
-                                    <div className="w-full bg-foam border-gray-800 bg-cover shadow-[inset_6px_6px_8px_-2px_rgba(0,0,0,0.6)] bg-center  bg-no-repeat p-1.5  rounded-md overflow-hidden ">
-                                        <div
-                                            className={`relative w-full bg-gray-200 rounded-md inset-0 ${text} text-[2px] p-0.5`}
-                                        >
-                                            <img
-                                                className="absolute inset-0 w-full h-full"
-                                                src={cardfrontImg}
-                                                alt="card front"
-                                            />
-                                            <div className="relative pb-1.5 w-full h-full">
-                                                <div
-                                                    className={`flex flex-col w-full h-full rounded border-4 ${border} bg-orange-100`}
-                                                >
-                                                    <p className="uppercase text-center leading-tight">
-                                                        borflab // <strong>top secret</strong> // specimen
-                                                    </p>
-                                                    <hr className={`border-0 h-px ${bg}`} />
-                                                    <div className="flex-grow flex overflow-hidden p-px">
-                                                        <img
-                                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${monster.ImageCid}`}
-                                                            className="mr-auto ml-auto h-full object-cover"
-                                                            alt="output"
-                                                        />
-                                                    </div>
-                                                    <hr className={`border-0 h-px ${bg}`} />
-                                                    <div className="flex justify-between p-px">
-                                                        <h1 className="leading-none uppercase font-bold text-xs">
-                                                            {monster.Name}
-                                                        </h1>
-                                                    </div>
-                                                    <p
-                                                        className={`p-px leading-none text-xs font-bold text-orange-400 uppercas ${bg}`}
-                                                    >
-                                                        {monster.Biome}
-                                                    </p>
-                                                    <p className="leading-tight p-px">
-                                                        <strong className="uppercase">observation: </strong>
-                                                        {monster.Lore}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
+                                    <div
+                                        className={`relative w-full inset-0`}
+                                        style={{
+                                            aspectRatio: "1 / 1.25",
+                                        }}
+                                    >
+                                        <img
+                                            className="absolute inset-0 w-full h-full"
+                                            src={slotImg}
+                                            alt="card front"
+                                        />
+                                        <img
+                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${monster.ImageCid}`}
+                                            className="absolute top-1/2 w-full -translate-y-1/2 left-0 object-cover z-10"
+                                            alt="output"
+                                        />
                                     </div>
+                                    <div className="rounded text-center font-bold text-[10px] border w-full bg-gray-200 shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)]">
+                                        {monster.Name}
+                                    </div>
+                                    <div
+                                        className={`${bg} w-full h-2 rounded-sm shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)]`}
+                                    ></div>
                                 </div>
                             );
                         })}

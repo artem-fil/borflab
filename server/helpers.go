@@ -115,7 +115,7 @@ func CheckStone(maybeStone string) (*StoneType, error) {
 func CheckBiome(maybeBiome string) (*Biome, error) {
 	biome := Biome(maybeBiome)
 	switch biome {
-	case BiomeAmazonia, BiomeAquatica, BiomePlushland, BiomeCanopica:
+	case BiomeAmazonia, BiomeCoralux, BiomePlushland, BiomeCanopica:
 		return &biome, nil
 	default:
 		return nil, fmt.Errorf("invalid biome: '%s'", maybeBiome)

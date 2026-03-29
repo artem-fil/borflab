@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef } from "react";
+import igniterImg from "@images/igniter2.png";
+import posterImg from "@images/poster01.png";
+import alarmSound from "@sounds/alarm.ogg";
+import clickSound from "@sounds/click.ogg";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import posterImg from "@images/poster01.png";
-import igniterImg from "@images/igniter2.png";
 import api from "../api";
-import clickSound from "@sounds/click.ogg";
-import alarmSound from "@sounds/alarm.ogg";
-import { STONES, PRODUCTS } from "../config.js";
+import { PRODUCTS, STONES } from "../config.js";
 
 export default function Step1({ next, setSpecimen, stone, setStone, biome, setBiome }) {
     const fileInputRef = useRef(null);
@@ -81,8 +81,8 @@ export default function Step1({ next, setSpecimen, stone, setStone, biome, setBi
         }
     };
 
-    const MAX_FILE_SIZE_MB = 10;
-    const MAX_DIMENSION = 2000;
+    const MAX_FILE_SIZE_MB = 5;
+    const MAX_DIMENSION = 1024;
 
     const handleFileChange = async (e) => {
         const file = e.target.files?.[0];

@@ -30,7 +30,7 @@ type Biome string
 
 const (
 	BiomeAmazonia  Biome = "amazonia"
-	BiomeAquatica  Biome = "aquatica"
+	BiomeCoralux  Biome = "coralux"
 	BiomePlushland Biome = "plushland"
 	BiomeCanopica  Biome = "canopica"
 )

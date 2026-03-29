@@ -341,7 +341,7 @@ export default function Step2({ current, specimen, stone, biome }) {
                                     </div>
                                 </div>
                                 <hr className={`border-0 h-0.5 ${bg}`} />
-                                <div className="px-1 leading-tight text-[10px]">
+                                <div className="px-1 leading-tight text-[9px]">
                                     <p>
                                         <strong>BORFOLOGIST:</strong> PSM-001
                                     </p>
@@ -380,18 +380,19 @@ export default function Step2({ current, specimen, stone, biome }) {
                                 </p>
                                 <hr className={`border-0 h-0.5 ${bg}`} />
                                 <div className="flex-grow flex p-1 relative">
-                                    <img
-                                        src={image ? `data:image/png;base64,${image}` : ""}
-                                        className="m-auto h-full object-cover"
-                                        style={{}}
-                                    />
+                                    {image && (
+                                        <img
+                                            src={image ? `data:image/png;base64,${image}` : ""}
+                                            className="m-auto h-full object-cover"
+                                        />
+                                    )}
                                 </div>
                                 <hr className={`border-0 h-0.5 ${bg}`} />
                                 <div className="p-1">
                                     <h1 className="font-bold text-[10px] uppercase truncate">
                                         {analyzeResult?.MONSTER_PROFILE?.name}
                                     </h1>
-                                    <p className="text-[10px] italic leading-none mt-0.5">
+                                    <p className="text-[9px] italic leading-none mt-0.5">
                                         {analyzeResult?.MONSTER_PROFILE?.lore}
                                     </p>
                                 </div>
