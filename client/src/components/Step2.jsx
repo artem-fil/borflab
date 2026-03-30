@@ -84,6 +84,13 @@ export default function Step2({ current, specimen, stone, biome }) {
         };
     }, []);
 
+    function stopAllAudio() {
+        audioLab.current.pause();
+        audioPrinter.current.pause();
+        audioLab.current.currentTime = 0;
+        audioPrinter.current.currentTime = 0;
+    }
+
     async function runWorkflow() {
         audioLab.current.volume = 0.5;
         audioLab.current.play();
@@ -97,6 +104,7 @@ export default function Step2({ current, specimen, stone, biome }) {
             const { Id } = await api.analyze(formData);
             await startSseSequence({ taskId: Id, mode: "ANALYZE" });
         } catch (err) {
+            stopAllAudio();
             await appendTypedLine(`❌ ERROR: ${err.message || "Analysis failed"}`);
             throw new Error(`Workflow stopped: ${err.message}`);
         }
@@ -163,12 +171,14 @@ export default function Step2({ current, specimen, stone, biome }) {
                     if (event === "failed") {
                         clearTimeout(timeout);
                         sseRef.current?.close();
+                        stopAllAudio();
                         reject(new Error(data.error || "Task failed"));
                     }
                 },
                 onError: (err) => {
                     clearTimeout(timeout);
                     sseRef.current?.close();
+                    stopAllAudio();
                     reject(err);
                 },
             });
@@ -221,6 +231,7 @@ export default function Step2({ current, specimen, stone, biome }) {
             });
         } catch (err) {
             setIsMinting(false);
+            stopAllAudio();
             setDisplayed((prev) => prev + `❌ ERROR: ${err.message}\n`);
         }
     }
@@ -235,6 +246,7 @@ export default function Step2({ current, specimen, stone, biome }) {
 
     function cleanupMint() {
         clearTimeout(mintTimeoutRef.current);
+        stopAllAudio();
         mintSSERef.current?.close();
     }
 
@@ -365,39 +377,43 @@ export default function Step2({ current, specimen, stone, biome }) {
                     {/* Front Card: Result */}
                     <div
                         ref={frontCardRef}
-                        className={`w-full absolute ${text} text-xs p-1 transition-all ease-out`}
+                        className={`w-full absolute ${text} text-xs p-1 transition-all ease-out pointer-events-auto`}
                         style={{
                             bottom: "-100%",
                             aspectRatio: "0.62 / 1",
                             animation: mintSuccess ? "shake 3s infinite" : "",
                         }}
                     >
-                        <img className="absolute inset-0 w-full h-full" src={cardfrontImg} alt="card front" />
-                        <div className="relative p-0.5 pb-5 w-full h-full">
-                            <div className={`flex flex-col w-full h-full rounded-xl border-4 ${border} bg-orange-100`}>
-                                <p className="uppercase text-center text-[6px]">
-                                    borflab // <strong>top secret</strong>
-                                </p>
-                                <hr className={`border-0 h-0.5 ${bg}`} />
-                                <div className="flex-grow flex p-1 relative">
-                                    {image && (
-                                        <img
-                                            src={image ? `data:image/png;base64,${image}` : ""}
-                                            className="m-auto h-full object-cover"
-                                        />
-                                    )}
-                                </div>
-                                <hr className={`border-0 h-0.5 ${bg}`} />
-                                <div className="p-1">
-                                    <h1 className="font-bold text-[10px] uppercase truncate">
-                                        {analyzeResult?.MONSTER_PROFILE?.name}
-                                    </h1>
-                                    <p className="text-[9px] italic leading-none mt-0.5">
-                                        {analyzeResult?.MONSTER_PROFILE?.lore}
+                        <Link to="/library">
+                            <img className="absolute inset-0 w-full h-full" src={cardfrontImg} alt="card front" />
+                            <div className="relative p-0.5 pb-5 w-full h-full">
+                                <div
+                                    className={`flex flex-col w-full h-full rounded-xl border-4 ${border} bg-orange-100`}
+                                >
+                                    <p className="uppercase text-center text-[6px]">
+                                        borflab // <strong>top secret</strong>
                                     </p>
+                                    <hr className={`border-0 h-0.5 ${bg}`} />
+                                    <div className="flex-grow flex p-1 relative">
+                                        {image && (
+                                            <img
+                                                src={image ? `data:image/png;base64,${image}` : ""}
+                                                className="m-auto h-full object-cover"
+                                            />
+                                        )}
+                                    </div>
+                                    <hr className={`border-0 h-0.5 ${bg}`} />
+                                    <div className="p-1">
+                                        <h1 className="font-bold text-[10px] uppercase truncate">
+                                            {analyzeResult?.MONSTER_PROFILE?.name}
+                                        </h1>
+                                        <p className="text-[9px] italic leading-none mt-0.5">
+                                            {analyzeResult?.MONSTER_PROFILE?.lore}
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        </Link>
                     </div>
                 </div>
 

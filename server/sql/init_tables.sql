@@ -8,7 +8,7 @@ create type rarity AS enum (
 
 create type biome AS enum (
   'amazonia',
-  'aquatica',
+  'coralux',
   'plushland',
   'canopica'
 );
@@ -63,14 +63,9 @@ create table if not exists experiments (
 create table if not exists stones (
     id serial primary key,
     user_id text not null references users(privy_id) on delete cascade,
-    mint_address varchar(44) unique not null,
     owner_address varchar(44) not null,
     spark_count smallint not null check (spark_count >= 0),
     type stone not null,
-    pda_address varchar(44) unique not null,
-    signature varchar(88) unique not null,
-    slot bigint not null,
-    minted timestamptz not null,
     created timestamptz default now()
 );
 

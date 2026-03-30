@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	OPENAI_COMPLETION_URL = "https://api.openai.com/v1/responses"
+	OPENAI_COMPLETION_URL = "https://api.openai.com/v1/chat/completions"
 	OPENAI_GENERATION_URL     = "https://api.openai.com/v1/images/generations"
 	PINATA_PIN_FILE_URL       = "https://api.pinata.cloud/pinning/pinFileToIPFS"
 	TOKEN_METADATA_PROGRAM_ID = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
@@ -568,41 +568,35 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	prompt := fmt.Sprintf(biomePrompt, stonePrompt)
 
 	requestBody := map[string]any{
-		"model": "gpt-5.2",
-		"reasoning": map[string]any{
-			"effort": "low",
-		},
-		"max_output_tokens": 2048,
-		"text": map[string]any{
-			"format": map[string]any{
-				"type": "json_object",
-			},
-		},
-		"input": []any{
-			map[string]any{
-				"role": "system",
-				"content": []map[string]any{
-					{
-						"type": "input_text",
-						"text": prompt,
-					},
-				},
-			},
-			map[string]any{
-				"role": "user",
-				"content": []map[string]any{
-					{
-						"type": "input_text",
-						"text": "Here's an image",
-					},
-					{
-						"type": "input_image",
-						"image_url": "data:image/jpeg;base64," + encodeToBase64(imgBytes),
-					},
-				},
-			},
-		},
-	}
+    "model": "gpt-4o",
+    "max_tokens": 2048,
+    "temperature": 0.3,
+    "top_p": 1.0,
+    "response_format": map[string]any{
+        "type": "json_object",
+    },
+    "messages": []any{
+        map[string]any{
+            "role": "system",
+            "content": prompt,
+        },
+        map[string]any{
+            "role": "user",
+            "content": []any{
+                map[string]any{
+                    "type": "text",
+                    "text": "Here's an image",
+                },
+                map[string]any{
+                    "type": "image_url",
+                    "image_url": map[string]any{
+                        "url": "data:image/jpeg;base64," + encodeToBase64(imgBytes),
+                    },
+                },
+            },
+        },
+    },
+}
 
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
@@ -647,34 +641,20 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	}
 
 	var rawResp struct {
-		Output []struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
-	}
+    Choices []struct {
+        Message struct {
+            Content string `json:"content"`
+        } `json:"message"`
+    } `json:"choices"`
+}
 
-	if err = json.Unmarshal(respBody, &rawResp); err != nil || len(rawResp.Output) == 0 {
-		fmt.Printf("\nRaw Body: %s\n", string(respBody))
-		fail("Laboratory analyzer returned corrupted data", err)
-		return
-	}
+if err = json.Unmarshal(respBody, &rawResp); err != nil || len(rawResp.Choices) == 0 {
+    fmt.Printf("\nRaw Body: %s\n", string(respBody))
+    fail("Laboratory analyzer returned corrupted data", err)
+    return
+}
 
-	var content string
-	for _, out := range rawResp.Output {
-		for _, c := range out.Content {
-			if c.Type == "output_text" {
-				content += c.Text
-			}
-		}
-	}
-
-	if content == "" {
-		fmt.Printf("\n--- EMPTY OUTPUT ---\nRaw Body: %s\n", string(respBody))
-		fail("Laboratory analyzer returned empty output", nil)
-		return
-	}
+content := rawResp.Choices[0].Message.Content
 
 	sanitizedJson, err := sanitizeJSON(content)
 	if err != nil {
@@ -842,13 +822,17 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	abilities := getProfileField(profile, "abilities")
 	habitat := getProfileField(profile, "habitat")
 
-	prompt := fmt.Sprintf("%s. %s", renderDirective, Prompts.PromptGeneration[experiment.Biome])
+	prompt := fmt.Sprintf("%s.\n %s", renderDirective, Prompts.PromptGeneration[experiment.Biome])
 
+	fmt.Println("---------------")
+	fmt.Println(prompt)
+	fmt.Println("---------------")
+	
 	requestBody := map[string]any{
 		"model":      "gpt-image-1.5",
 		"n":          1,
 		"size":       "1024x1024",
-		"quality":    "medium",
+		"quality":    "high",
 		"prompt":     prompt,
 		"moderation": "low",
 	}
@@ -1012,6 +996,7 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		"image":        base64Image,
 		"experimentId": experiment.Id,
 	})
+	
 }
 
 func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
