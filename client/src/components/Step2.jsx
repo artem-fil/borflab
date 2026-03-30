@@ -135,7 +135,7 @@ export default function Step2({ current, specimen, stone, biome }) {
                             // Режим GENERATE: выезжает back-карточка (снизу вверх)
                             if (backCardRef.current) {
                                 backCardRef.current.style.transitionDuration = "500ms";
-                                backCardRef.current.style.bottom = `-${100 - p}%`;
+                                backCardRef.current.style.transform = `translateY(${100 - p}%)`;
                             }
                         }
                     }
@@ -189,7 +189,7 @@ export default function Step2({ current, specimen, stone, biome }) {
         setPhase("MINTING");
         if (backCardRef.current) {
             backCardRef.current.style.transitionDuration = "10000ms";
-            backCardRef.current.style.bottom = "-100%";
+            backCardRef.current.style.transform = "translateY(100%)";
         }
         handleMintAction(expId);
     }
@@ -239,8 +239,13 @@ export default function Step2({ current, specimen, stone, biome }) {
     function showFrontCard() {
         audioPrinter.current.pause();
         if (frontCardRef.current) {
-            frontCardRef.current.style.transitionDuration = "1500ms";
-            frontCardRef.current.style.bottom = "0";
+            const el = frontCardRef.current;
+
+            el.style.transitionDuration = "1500ms";
+
+            requestAnimationFrame(() => {
+                el.style.transform = "translateY(0)";
+            });
         }
     }
 
@@ -328,8 +333,8 @@ export default function Step2({ current, specimen, stone, biome }) {
                     {/* Back Card: Analysis Report */}
                     <div
                         ref={backCardRef}
-                        className={`w-full absolute ${text} text-xs p-1 transition-all ease-out`}
-                        style={{ bottom: "-100%", aspectRatio: "0.62 / 1", fontSize: "10px" }}
+                        className={`box-border w-full absolute ${text} text-xs p-1 transition-all ease-out`}
+                        style={{ transform: "translateY(100%)", aspectRatio: "0.62 / 1", fontSize: "10px" }}
                     >
                         <img className="absolute inset-0 w-full h-full" src={cardbackImg} alt="card back" />
                         <div className="relative p-0.5 pb-5 w-full h-full">
@@ -377,11 +382,10 @@ export default function Step2({ current, specimen, stone, biome }) {
                     {/* Front Card: Result */}
                     <div
                         ref={frontCardRef}
-                        className={`w-full absolute ${text} text-xs p-1 transition-all ease-out pointer-events-auto`}
+                        className={`box-border w-full absolute ${text} text-xs p-1 transition-all ease-out pointer-events-auto`}
                         style={{
-                            bottom: "-100%",
+                            transform: "translateY(100%)",
                             aspectRatio: "0.62 / 1",
-                            animation: mintSuccess ? "shake 3s infinite" : "",
                         }}
                     >
                         <Link to="/library">
@@ -398,6 +402,7 @@ export default function Step2({ current, specimen, stone, biome }) {
                                         {image && (
                                             <img
                                                 src={image ? `data:image/png;base64,${image}` : ""}
+                                                style={{ animation: mintSuccess ? "shake 3s infinite" : "" }}
                                                 className="m-auto h-full object-cover"
                                             />
                                         )}
