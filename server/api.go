@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"math/rand"
 	"mime/multipart"
 	"net/http"
@@ -549,14 +548,8 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		LogError("API", msg, err)
 		cancel()
 		a.sseAgent.Emit(taskId, "failed", map[string]any{"error": msg})
-		ts.Progress = 100
 		ts.Done = true
 	}
-
-	go a.simulateProgress(ctx, 1, 99, 25*time.Second, func(progress int) {
-		ts.Progress = progress
-		a.sseAgent.Emit(taskId, "progress", map[string]any{"progress": progress})
-	})
 
 	biomePrompt, ok1 := Prompts.PromptAnalyze[experiment.Biome]
 	stonePrompt, ok2 := Prompts.PromptStone[experiment.Stone][experiment.Biome]
@@ -568,35 +561,35 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	prompt := fmt.Sprintf(biomePrompt, stonePrompt)
 
 	requestBody := map[string]any{
-    "model": "gpt-4o",
-    "max_tokens": 2048,
-    "temperature": 0.3,
-    "top_p": 1.0,
-    "response_format": map[string]any{
-        "type": "json_object",
-    },
-    "messages": []any{
-        map[string]any{
-            "role": "system",
-            "content": prompt,
-        },
-        map[string]any{
-            "role": "user",
-            "content": []any{
-                map[string]any{
-                    "type": "text",
-                    "text": "Here's an image",
-                },
-                map[string]any{
-                    "type": "image_url",
-                    "image_url": map[string]any{
-                        "url": "data:image/jpeg;base64," + encodeToBase64(imgBytes),
-                    },
-                },
-            },
-        },
-    },
-}
+		"model":       "gpt-4o",
+		"max_tokens":  2048,
+		"temperature": 0.3,
+		"top_p":       1.0,
+		"response_format": map[string]any{
+			"type": "json_object",
+		},
+		"messages": []any{
+			map[string]any{
+				"role":    "system",
+				"content": prompt,
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type": "text",
+						"text": "Here's an image",
+					},
+					map[string]any{
+						"type": "image_url",
+						"image_url": map[string]any{
+							"url": "data:image/jpeg;base64," + encodeToBase64(imgBytes),
+						},
+					},
+				},
+			},
+		},
+	}
 
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
@@ -641,20 +634,20 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	}
 
 	var rawResp struct {
-    Choices []struct {
-        Message struct {
-            Content string `json:"content"`
-        } `json:"message"`
-    } `json:"choices"`
-}
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
 
-if err = json.Unmarshal(respBody, &rawResp); err != nil || len(rawResp.Choices) == 0 {
-    fmt.Printf("\nRaw Body: %s\n", string(respBody))
-    fail("Laboratory analyzer returned corrupted data", err)
-    return
-}
+	if err = json.Unmarshal(respBody, &rawResp); err != nil || len(rawResp.Choices) == 0 {
+		fmt.Printf("\nRaw Body: %s\n", string(respBody))
+		fail("Laboratory analyzer returned corrupted data", err)
+		return
+	}
 
-content := rawResp.Choices[0].Message.Content
+	content := rawResp.Choices[0].Message.Content
 
 	sanitizedJson, err := sanitizeJSON(content)
 	if err != nil {
@@ -691,7 +684,6 @@ content := rawResp.Choices[0].Message.Content
 
 	go a.generateImage(nextTaskId, parsed, *experiment)
 
-	ts.Progress = 100
 	ts.Done = true
 	ts.Result = parsed
 	ts.NextTaskId = nextTaskId
@@ -702,87 +694,21 @@ content := rawResp.Choices[0].Message.Content
 	})
 }
 
-func (a *api) simulateProgress(
-	ctx context.Context,
-	from, to int,
-	duration time.Duration,
-	onProgress func(progress int),
-) {
-	const tickInterval = 1 * time.Second
-
-	ticks := int(duration / tickInterval)
-	if ticks <= 0 {
-		ticks = 1
-	}
-
-	total := to - from
-	baseStep := float64(total) / float64(ticks)
-
-	const variance = 5
-
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	ticker := time.NewTicker(tickInterval)
-	defer ticker.Stop()
-
-	current := from
-
-	for i := 0; i < ticks; i++ {
-		select {
-		case <-ctx.Done():
-			return
-
-		case <-ticker.C:
-			remaining := to - current
-			if remaining <= 0 {
-				return
-			}
-
-			jitter := (r.Float64()*2 - 1) * variance
-
-			step := int(math.Round(baseStep + jitter))
-
-			if step < 1 {
-				step = 1
-			}
-
-			if step > remaining {
-				step = remaining
-			}
-
-			current += step
-			onProgress(current)
-		}
-	}
-}
-
 func (a *api) generateImage(taskId string, specimen map[string]any, experiment Experiment) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	ts := &TaskStatus{
-		Progress: 0,
-		Done:     false,
+		Done: false,
 	}
 	tasks.Store(taskId, ts)
 
-	var cancelProgress context.CancelFunc = func() {}
-
 	fail := func(msg string, err error) {
 		LogError("API", msg, err)
-		cancelProgress()
 		cancel()
 		a.sseAgent.Emit(taskId, "failed", map[string]any{"error": msg})
-		ts.Progress = 100
 		ts.Done = true
 	}
-
-	progressCtx, progressCancel := context.WithCancel(ctx)
-	cancelProgress = progressCancel
-
-	go a.simulateProgress(progressCtx, 1, 75, 40*time.Second, func(progress int) {
-		ts.Progress = progress
-		a.sseAgent.Emit(taskId, "progress", map[string]any{"progress": progress})
-	})
 
 	renderDirective, ok := specimen["RENDER_DIRECTIVE"]
 	profile, ok2 := specimen["MONSTER_PROFILE"].(map[string]any)
@@ -827,7 +753,7 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	fmt.Println("---------------")
 	fmt.Println(prompt)
 	fmt.Println("---------------")
-	
+
 	requestBody := map[string]any{
 		"model":      "gpt-image-1.5",
 		"n":          1,
@@ -887,16 +813,6 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 
 	base64Image := parsed.Data[0].B64JSON
 	generated := time.Now().UTC()
-
-	cancelProgress()
-
-	progressCtx, progressCancel = context.WithCancel(ctx)
-	cancelProgress = progressCancel
-
-	go a.simulateProgress(progressCtx, 76, 99, 15*time.Second, func(progress int) {
-		ts.Progress = progress
-		a.sseAgent.Emit(taskId, "progress", map[string]any{"progress": progress})
-	})
 
 	imageCid, err := uploadImageToPinata(a.cfg.Pinata.PinataToken, base64Image, name)
 	if err != nil {
@@ -982,7 +898,6 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		return
 	}
 
-	ts.Progress = 100
 	ts.Done = true
 	ts.Result = struct {
 		Image        string `json:"image"`
@@ -996,7 +911,6 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		"image":        base64Image,
 		"experimentId": experiment.Id,
 	})
-	
 }
 
 func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {

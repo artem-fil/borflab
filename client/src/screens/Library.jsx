@@ -81,7 +81,8 @@ export default function Library() {
     };
 
     return (
-        <div className="flex-grow flex flex-col items-center">
+        <div className="flex-grow flex flex-col items-center min-h-0 overflow-hidden">
+            {/* top bar */}
             <div className="w-full flex justify-between px-4 py-4">
                 <div className="flex flex-col">
                     <h2 className="text-white font-bold text-xl">BORFcard Library</h2>
@@ -95,7 +96,7 @@ export default function Library() {
                         label={monsterDialog ? "close" : "sort"}
                     />
                     <div
-                        className={` absolute top-full right-0 flex flex-col items-end text-white bg-black/90 rounded-md uppercase transform transition-all duration-300 origin-top-right z-10 ${
+                        className={` absolute top-full right-0 flex flex-col items-end text-white bg-black/90 rounded-md uppercase transform transition-all duration-300 origin-top-right z-20 ${
                             openSort ? "scale-y-100 opacity-100" : "scale-y-0 opacity-0"
                         }`}
                         style={{ transformOrigin: "top right" }}
@@ -120,16 +121,19 @@ export default function Library() {
             <div className="w-full h-4 border-b-2 border-black shadow-md">
                 <img src={borderTopImg} className={`h-full w-full object-cover`} />
             </div>
+            {/* cards */}
             <div
                 style={{
                     backgroundBlendMode: "multiply",
                     backgroundColor: "rgba(0,0,0,0.3)",
                 }}
-                className="w-full flex-grow bg-metal bg-cover  bg-center  bg-no-repeat px-4 py-4"
+                className={`w-full flex-grow bg-metal bg-cover bg-center bg-no-repeat px-4 py-4 min-h-0 ${
+                    monsterDialog ? "overflow-hidden" : "overflow-y-auto"
+                }`}
             >
                 {monsterDialog ? (
                     <div className="flex items-center justify-center w-full h-full">
-                        <Card monster={monsterDialog} />
+                        <Card monster={monsterDialog} className="max-h-full max-w-full w-auto h-auto" />
                     </div>
                 ) : (
                     <div className="grid grid-cols-3 gap-x-3 gap-y-2 w-full h-full">
@@ -173,6 +177,7 @@ export default function Library() {
             <div className="w-full h-4 border-b-2 border-black shadow-md">
                 <img src={borderBottomImg} className={`h-full w-full object-cover`} />
             </div>
+            {/* pagination */}
             <div className="w-full px-4 flex gap-2 items-center justify-between py-4 text-lg">
                 <button
                     onClick={() => handlePageChange(pagination.page - 1)}
