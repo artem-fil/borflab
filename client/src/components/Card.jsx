@@ -1,5 +1,6 @@
 import cardbackImg from "@images/card-back.png";
 import cardfrontImg from "@images/card-front.png";
+import watermarkImg from "@images/watermark.png";
 
 import { useState } from "react";
 
@@ -9,6 +10,8 @@ export default function Card({ monster }) {
     const [flipped, setFlipped] = useState(false);
     const {
         Name,
+        Height,
+        Weight,
         UserId,
         Habitat,
         Species,
@@ -16,18 +19,17 @@ export default function Card({ monster }) {
         Stone,
         Lore,
         Abilities,
-        MovementClass,
-        Behaviour,
+        Size,
         Personality,
         ImageCid,
         Created,
     } = monster;
-    console.log(monster);
-    const { border, bg, text } = BIOMES[Biome];
+
+    const { border, bg, text, icon } = BIOMES[Biome];
 
     return (
         <div
-            className="max-h-full max-w-full h-full w-auto"
+            className="max-h-full font-exo  max-w-full h-full w-auto"
             style={{
                 perspective: "1200px",
                 aspectRatio: "0.62 / 1",
@@ -35,7 +37,7 @@ export default function Card({ monster }) {
         >
             <div
                 onClick={() => setFlipped(!flipped)}
-                className="relative cursor-pointer w-full h-full"
+                className="relative  cursor-pointer w-full h-full"
                 style={{
                     transformStyle: "preserve-3d",
                     transition: "transform 0.6s cubic-bezier(0.4,0.2,0.2,1)",
@@ -52,67 +54,69 @@ export default function Card({ monster }) {
                     }}
                 >
                     <img className="absolute inset-0 w-full h-full" src={cardbackImg} alt="card back" />
-                    <div className="relative p-1.5 pb-8 rounded-2xl w-full h-full">
+                    <div className="relative p-2 pb-8 rounded-2xl w-full h-full">
                         <div
-                            className={`relative flex flex-col border-4 rounded-xl w-full outline-4 outline-orange-100 h-full ${border} bg-orange-100`}
+                            className="absolute rounded-2xl mx-1 mb-8 mt-1 bg-paper inset-0 z-10"
+                            style={{
+                                backgroundSize: "cover",
+                                mixBlendMode: "multiply",
+                                opacity: 1,
+                            }}
+                        />
+                        <div
+                            className={`relative flex flex-col border-4 rounded-xl w-full ring-orange-50 ring-4 h-full ${border} bg-orange-50`}
                         >
-                            <p className="p-1 leading-none">SPECIMEN ANALYSIS LOG // DEPT:006</p>
+                            <p className="text-center p-1 leading-none text-accent">
+                                SPECIMEN ANALYSIS LOG // DEPT:006 // CHAPTER I
+                            </p>
                             <hr className={`border-0 h-0.5 ${bg}`} />
                             <div className=" flex w-full items-center">
-                                <div className="p-1 h-32 w-8/12">
+                                <div className=" flex items-center p-1 h-24 w-1/3">
                                     <img
                                         src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${ImageCid}`}
-                                        className="ml-auto mr-auto rounded h-full object-cover"
+                                        className="ml-auto mr-auto rounded object-cover"
                                         alt="input image"
                                     />
                                 </div>
-                                <div className={`border-0 w-0.5 h-full ${bg}`} />
-                                <div className="p-1 w-4/12 h-32 flex flex-col gap-1">
-                                    <img src={STONES[Stone]?.image} className="object-cover" alt="borfstone" />
-                                    <strong className="mx-1 text-center uppercase py-1 bg-red-800 text-white">
-                                        common
-                                    </strong>
+                                <div className={`border-0 w-px h-full ${bg}`} />
+                                <div
+                                    className={`uppercase p-1 font-special w-2/3 h-24 flex flex-col justify-between ${text}`}
+                                >
+                                    <p>ISSUE DATE: {`${new Date(Created).toLocaleDateString()}`}</p>
+                                    <p>SPIRAL INDEX: </p>
+                                    <p>[23/840K BORF’S]</p>
+                                    <p>[23/840K RUBY]</p>
+                                    <p>[{Biome}: 001]</p>
                                 </div>
                             </div>
                             <hr className={`border-0 h-0.5 ${bg}`} />
-                            <p className=" leading-none p-1">
-                                <strong className="uppercase">BORFOLOGIST ID: </strong>
+                            <p className=" leading-none p-1 text-lg">
+                                <strong className={`uppercase  ${text}`}>BORFOLOGIST ID: </strong>
                                 {`# ${UserId.slice(-6)}/I`}
                             </p>
+                            <strong className={`p-2 ${bg} text-orange-50 uppercase text-xl`}>borf profile</strong>
+                            <div className="p-1">
+                                <strong className={`${text} uppercase`}>01. observation: </strong>
+                                <p className="text-black leading-tight font-special">{Lore}</p>
+                            </div>
                             <hr className={`border-0 h-0.5 ${bg}`} />
-                            <p className=" leading-none p-1">
-                                <strong className="uppercase">spiral index: </strong>
-                                {`[23/840K BORF’S][3/164.4K ${"unknown"}][${Biome}: 001]`}
-                            </p>
+                            <div className="p-1">
+                                <strong className={`${text} uppercase`}>02. personality: </strong>
+                                <p className="text-black leading-tight font-special">{Personality}</p>
+                            </div>
                             <hr className={`border-0 h-0.5 ${bg}`} />
-                            <p className="leading-none p-1">
-                                <strong className="uppercase">issue date: </strong>
-                                {`${new Date(Created).toLocaleDateString()}`}
-                            </p>
-                            <strong className={`p-1 ${bg} text-white uppercase`}>[borf profile]</strong>
-                            <p className="leading-none p-1">
-                                <strong className="uppercase">movement class: </strong>
-                                {MovementClass}
-                            </p>
+                            <div className=" p-1">
+                                <strong className={`${text} uppercase`}>03. abilities: </strong>
+                                <p className="text-black leading-tight font-special">{Abilities}</p>
+                            </div>
                             <hr className={`border-0 h-0.5 ${bg}`} />
-                            <p className="leading-none p-1">
-                                <strong className="uppercase">behaviour: </strong>
-                                {Behaviour}
-                            </p>
+                            <div className="p-1">
+                                <strong className={`${text} uppercase`}>04. habitat: </strong>
+                                <p className="text-black leading-tight font-special">{Habitat}</p>
+                            </div>
                             <hr className={`border-0 h-0.5 ${bg}`} />
-                            <p className="leading-none p-1">
-                                <strong className="uppercase">personality: </strong>
-                                {Personality}
-                            </p>
-                            <hr className={`border-0 h-0.5 ${bg}`} />
-                            <p className="leading-none p-1">
-                                <strong className="uppercase">abilities: </strong>
-                                {Abilities}
-                            </p>
-                            <hr className={`border-0 h-0.5 ${bg}`} />
-                            <p className="leading-none p-1">
-                                <strong className="uppercase">habitat: </strong>
-                                {Habitat}
+                            <p className="text-right p-1 leading-none text-accent">
+                                filed under BORFLAB DEPT.006 // Spiral confirmed
                             </p>
                         </div>
                     </div>
@@ -121,40 +125,71 @@ export default function Card({ monster }) {
                 {/* front */}
                 <div className={`w-full absolute inset-0 ${text} text-xs p-1`} style={{ backfaceVisibility: "hidden" }}>
                     <img className="absolute inset-0 w-full h-full" src={cardfrontImg} alt="card front" />
-                    <div className="relative p-1.5 pb-8 w-full h-full">
-                        <div className={`flex flex-col w-full h-full rounded-2xl border-4 ${border} bg-orange-100`}>
-                            <p className="uppercase text-center">
-                                borflab // <strong>top secret</strong> // specimen
-                            </p>
+                    <div className="relative p-2.5 pb-9 w-full h-full ">
+                        <div
+                            className="absolute rounded-2xl mx-1 mb-8 mt-1 bg-paper inset-0 z-10"
+                            style={{
+                                backgroundSize: "cover",
+                                mixBlendMode: "multiply",
+                                opacity: 1,
+                            }}
+                        />
+                        <div
+                            className={`relative flex flex-col w-full h-full rounded-2xl border-4 ring-orange-50 ring-4 ${border} bg-orange-50`}
+                        >
+                            <div className="p-1.5 uppercase">
+                                <p>borflab exo-bio division</p>
+                                <p>security class: top secret</p>
+                                <p>document type: specimen data card</p>
+                            </div>
                             <hr className={`border-0 h-0.5 ${bg}`} />
-                            <div className="flex-grow flex overflow-hidden p-1">
+                            <div className="relative flex-grow flex overflow-hidden p-1">
                                 <img
                                     src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${ImageCid}`}
-                                    className="max-h-full max-w-full w-auto h-auto object-contain mr-auto ml-auto"
+                                    className="max-h-full max-w-full w-auto h-auto object-contain mr-auto ml-auto z-10"
                                     alt="output"
                                 />
+                                <img src={watermarkImg} className="absolute right-0 w-2/3 top-0" alt="watermark" />
                             </div>
                             <hr className={`border-0 h-0.5 ${bg}`} />
-                            <div className="flex justify-between p-1">
-                                <div className="flex flex-col justify-between">
-                                    <h1 className="leading-tight uppercase font-bold text-lg">{Name}</h1>
-                                    <p className="uppercase leading-none text-sm">
-                                        species: <strong>{Species}</strong>
+                            <div className="flex justify-between">
+                                <div className="flex flex-col gap-2 p-1 grow text-md ">
+                                    <p className="flex gap-2 items-baseline">
+                                        ID:
+                                        <span
+                                            className={`leading-none grow border-b ${border} uppercase  font-special text-black`}
+                                        >
+                                            {Name}
+                                        </span>
+                                    </p>
+                                    <p className="flex gap-2 items-baseline">
+                                        CLASS:
+                                        <span
+                                            className={`leading-none grow border-b ${border} uppercase  font-special text-black`}
+                                        >
+                                            {Species}
+                                        </span>
+                                    </p>
+                                    <p className="flex gap-2 items-baseline">
+                                        SIZE:{" "}
+                                        <span
+                                            className={`leading-none grow border-b ${border} font-special text-black`}
+                                        >
+                                            {`H: ${Height}cm / W: ${Weight}kg`}
+                                        </span>
                                     </p>
                                 </div>
-                                <div className={`border-2 ${border}`}>
-                                    <h1 className="p-1 text-lg font-bold text-center">I</h1>
-                                    <hr className={`border-0 h-0.5 ${bg}`} />
-                                    <span className="p-1">chapter</span>
+                                <hr className={`w-0.5 h-20 ${bg}`} />
+                                <div className="p-1 w-20 h-20">
+                                    <img src={STONES[Stone]?.image} className="w-full" alt="borfstone" />
                                 </div>
                             </div>
-                            <p className={`p-1 text-sm uppercase text-gray-100 ${bg}`}>
-                                biome: <strong className="font-bold text-orange-400">{Biome}</strong>
-                            </p>
-                            <p className="leading-tight p-1">
-                                <strong className="uppercase">observation: </strong>
-                                {Lore}
-                            </p>
+                            <div className={`flex text-xl items-center gap-1 p-1 uppercase text-orange-50 ${bg}`}>
+                                <img src={icon} className="w-10 opacity-50" alt="" />
+                                <span>
+                                    bio-sector: <strong className="font-bold text-accent">{Biome}</strong>
+                                </span>
+                            </div>
                         </div>
                     </div>
                 </div>

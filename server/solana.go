@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -442,6 +443,7 @@ func (sa *SolanaAgent) processSingleSignature(ctx context.Context, sig string, s
 	if err != nil {
 		notification.Stage = SolanaStageInternalError
 		sa.db.UpdateSolanaNotification(ctx, &notification)
+		LogError("Solana", fmt.Sprintf("[%s] RPC GetTransaction failed", sig), err)
 		return fmt.Errorf("rpc error for %s: %w", sig, err)
 	}
 
@@ -452,25 +454,31 @@ func (sa *SolanaAgent) processSingleSignature(ctx context.Context, sig string, s
 		programId := solana.MustPublicKeyFromBase58(sa.cfg.ProgramId)
 		sep := NewSolanaEventProcessor(programId, sa.rpcClient, sa.httpClient)
 		if err := sep.ExtractEvents(&notification); err != nil {
+			LogError("Solana", fmt.Sprintf("[%s] Event extraction failed: %v", sig), err)
 			notification.Stage = SolanaStageEventError
 		} else {
 			processResult, err := sep.ProcessEvents(ctx, &notification)
 			if err != nil {
+				LogError("Solana", fmt.Sprintf("[%s] ProcessEvents business logic failed", sig), err)
 				notification.Stage = SolanaStageBusinessError
 			} else {
 				if processResult.Mutator.HasMutations() {
 					if err := processResult.Mutator.ApplyAll(ctx, sa.db); err != nil {
+						LogError("Solana", fmt.Sprintf("[%s] DB Mutation ApplyAll failed", sig), err)
 						notification.Stage = SolanaStageInternalError
 					}
 				}
 				if notification.Stage == SolanaStageDone && processResult.Applicator.HasApplications() {
-					_ = processResult.Applicator.ApplyAll(ctx, sa.telegram, sa.sseAgent)
+					if err := processResult.Applicator.ApplyAll(ctx, sa.telegram, sa.sseAgent); err != nil {
+						LogError("Solana", fmt.Sprintf("[%s] External notification failed", sig), err)
+					}
 				}
 			}
 		}
 	}
 
 	if err := sa.db.UpdateSolanaNotification(ctx, &notification); err != nil {
+		LogError("Solana", fmt.Sprintf("[%s] Final DB update failed", sig), err)
 		return fmt.Errorf("failed to update notification: %w", err)
 	}
 
@@ -611,6 +619,16 @@ func (sep *SolanaEventProcessor) ProcessEvents(ctx context.Context, notification
 					maybeError = err
 					break
 				}
+				weight, err := strconv.Atoi(metadata["weight"])
+				if err != nil {
+					maybeError = err
+					break
+				}
+				height, err := strconv.Atoi(metadata["height"])
+				if err != nil {
+					maybeError = err
+					break
+				}
 				ownerPubKeyStr := ownerPubKey.String()
 				monster := &Monster{
 					ExperimentId:     int(payload.ExperimentId),
@@ -622,6 +640,8 @@ func (sep *SolanaEventProcessor) ProcessEvents(ctx context.Context, notification
 					Name:             metadata["name"],
 					Species:          metadata["species"],
 					Lore:             metadata["lore"],
+					Height:           height,
+					Weight:           weight,
 					MovementClass:    metadata["movement_class"],
 					Behaviour:        metadata["behaviour"],
 					Personality:      metadata["personality"],
@@ -1020,7 +1040,7 @@ func (sep *SolanaEventProcessor) parseCardMetadata(metadataJSON []byte) (map[str
 		return nil
 	}
 
-	for _, key := range []string{"species", "lore", "movement_class", "behaviour", "personality", "abilities", "habitat"} {
+	for _, key := range []string{"species", "lore", "height", "weight", "movement_class", "behaviour", "personality", "abilities", "habitat"} {
 		if err := extractString(key); err != nil {
 			return nil, err
 		}

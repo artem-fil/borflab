@@ -79,6 +79,8 @@ create table if not exists monsters (
     card_state_address varchar(44) not null,
 
     name text not null,
+    height int,
+    weight int,
     species text not null,
     lore text not null,
     movement_class text not null,

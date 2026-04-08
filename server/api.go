@@ -726,6 +726,8 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 			"name":           "Unnamed Creature",
 			"species":        "Mysterious Species",
 			"lore":           "Its origins are lost to time",
+			"height": "50",
+			"weight": "7",
 			"movement_class": "Unknown Locomotion",
 			"behaviour":      "Behavior undocumented",
 			"personality":    "Enigmatic",
@@ -747,12 +749,11 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	personality := getProfileField(profile, "personality")
 	abilities := getProfileField(profile, "abilities")
 	habitat := getProfileField(profile, "habitat")
+	h, w := randomSize(experiment.Stone, experiment.Biome)
+	height := strconv.Itoa(h)
+	weight := strconv.Itoa(w)
 
 	prompt := fmt.Sprintf("%s.\n %s", renderDirective, Prompts.PromptGeneration[experiment.Biome])
-
-	fmt.Println("---------------")
-	fmt.Println(prompt)
-	fmt.Println("---------------")
 
 	requestBody := map[string]any{
 		"model":      "gpt-image-1.5",
@@ -866,6 +867,8 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 			},
 			"species":        species,
 			"lore":           lore,
+			"weight":         weight,
+			"height":         height,
 			"movement_class": movementClass,
 			"behaviour":      behaviour,
 			"personality":    personality,

@@ -1,5 +1,10 @@
 package main
 
+import (
+	"math"
+	"math/rand"
+)
+
 const (
 	PromptAnalyze int = iota
 	PromptGeneration
@@ -12,22 +17,77 @@ type prompts struct {
 	PromptGeneration map[Biome]string
 }
 
+var sizeMap = map[StoneType]map[Biome]SizeRange{
+    StoneQuartz: {
+        BiomeAmazonia: {1, 40, 1, 1000},
+        BiomePlushland: {1, 70, 1, 6000},
+        BiomeCoralux:  {1, 60, 1, 2000},
+    },
+    StoneAmazonite: {
+        BiomeAmazonia: {1, 40, 1, 5000},
+        BiomePlushland:{1, 100, 1, 7000},
+        BiomeCoralux:  {1, 80, 1, 3000},
+    },
+    StoneRuby: {
+        BiomeAmazonia: {1, 20, 1, 200},
+        BiomePlushland:{1, 160, 1, 20000},
+        BiomeCoralux:  {1, 100, 1, 10000},
+    },
+    StoneAgate: {
+        BiomeAmazonia: {1, 200, 1, 100000},
+        BiomePlushland:{1, 140, 1, 5000},
+        BiomeCoralux:  {1, 30, 1, 500},
+    },
+    StoneSapphire: {
+        BiomeAmazonia: {1, 60, 1, 4000},
+        BiomePlushland:{1, 180, 1, 30000},
+        BiomeCoralux:  {1, 90, 1, 30000},
+    },
+    StoneTopaz: {
+        BiomeAmazonia: {1, 80, 1, 4000},
+        BiomePlushland:{1, 200, 1, 40000},
+        BiomeCoralux:  {1, 40, 1, 6000},
+    },
+    StoneJade: {
+        BiomeAmazonia: {1, 160, 1, 50000},
+        BiomePlushland:{1, 220, 1, 60000},
+        BiomeCoralux:  {1, 80, 1, 12000},
+    },
+}
+
+func randomSize(stone StoneType, biome Biome) (int, int) {
+	if biomeMap, ok := sizeMap[stone]; ok {
+		if r, ok := biomeMap[biome]; ok {
+			h := rand.Intn(r.MaxHeightCm-r.MinHeightCm+1) + r.MinHeightCm
+
+			minKg := float64(r.MinWeightG) / 1000.0
+			maxKg := float64(r.MaxWeightG) / 1000.0
+
+			minSteps := int(math.Ceil(minKg * 2))
+			maxSteps := int(math.Floor(maxKg * 2))
+
+			steps := rand.Intn(maxSteps-minSteps+1) + minSteps
+			wKg := float64(steps) / 2.0
+
+			w := int(wKg * 1000) 
+
+			return h, w
+		}
+	}
+
+	return 50, 1000
+}
+
 var Prompts = prompts{
 	PromptAnalyze: map[Biome]string{
 		BiomeAmazonia: `
-0. PURPOSE (WHY YOU EXIST)
+1. PURPOSE (WHY YOU EXIST)
+Rule of Infinite Adaptability: No matter how abstract, symbolic, or "non-biological" the input DNA appears (memes, icons, text, machines, toys), you MUST treat it as a valid genetic blueprint. If the input is a meme, it is a rare viral organism. If it is a toy, it is a species with chitinous plating. Refusal is a failure of the Borflab protocol.
 Your job is to reimagine the input image as a newly discovered Canopica organism.
+Anything including drawing, text, abstract or mechanical thing must also be considered as a creature.
 The result must feel biologically real, as if it evolved within a dense, living rainforest ecosystem.
 All outcomes must follow this progression: Recognisability → “I see my creature” Stone Influence → “I see what changed it” Biome Influence → “I understand where it lives”
-Failure at any stage breaks evolutionary trust.
-1. INPUT VALIDATION (GATEKEEPER)
-BORFLAB only accepts images of objects drawn, crafted, created or assembled by a human as DNA.
-Reject the request if the image contains:
--inappropriate objects (weapons, sexual items, or explicit objects)
--a photo of a real human or any real animal. IMPORTANT: Drawings are accepted.
--explicit written language or offensive text
-If rejected, return:
-{ "Error": "<reason>" }
+Evolution is chaotic; force a biological explanation for any anomaly.
 2. CORE PRINCIPLE (NON-NEGOTIABLE)
 The creature must remain a biological evolution of the input DNA.
 All traits must emerge from visible anatomy:
@@ -131,25 +191,19 @@ Follow this structure in your JSON answer:
     }, 
     "RENDER_DIRECTIVE": "<Based on your observation, write a rich and detailed description of this newly discovered Canopica creature. Begin by clearly stating the leg count in the image. Describe the creature's overall shape based on silhouette and structure, shape of head and how it sits with the body, including side limbs. Describe distinctive features in detail, shape and structure, such as facial features, mouth, teeth, eyes, horns, tentacles or patterns and stay true to the shape of these. Include key colors with HEX where relevant. Ensure no mechanical or artificial elements are described. No hard edges, no constructed materials, no bricks. The creature must feel as an evolutionary inevitability of the rainforest.>", 
 }
+In case you cannot analyze specimen return { "Error": "<reason>" }.
 Keep RENDER_DIRECTIVE under 400 words`,
 		BiomePlushland: `
-0. PURPOSE (WHY YOU EXIST)
+1. PURPOSE (WHY YOU EXIST)
+Rule of Infinite Adaptability: No matter how abstract, symbolic, or "non-biological" the input DNA appears (memes, icons, text, machines, toys), you MUST treat it as a valid genetic blueprint. If the input is a meme, it is a rare viral organism. If it is a toy, it is a species with chitinous plating. Refusal is a failure of the Borflab protocol.
 Your job is to reimagine the input image as a newly discovered Plushlandia organism.
+Anything including drawing, text, abstract or mechanical thing must also be considered as a creature.
 The result must feel biologically real, as if it evolved within a diverse textile and fashion biome.
 All outcomes must follow this progression: 
 Recognisability → “I see my creature” 
 Stone Influence → “I see what changed it” 
-Biome Influence → “I understand where it lives”
-Failure at any stage breaks evolutionary trust.
-1. INPUT VALIDATION (GATEKEEPER)
-BORFLAB only accepts images of objects drawn, crafted, created or assembled by a human as DNA.
-Reject the request if the image contains:
-inappropriate objects (weapons, sexual items, or explicit objects)
-a photo of a real human or any real animal 
-IMPORTANT: Drawings are accepted.
-explicit written language or offensive text
-If rejected, return:
-{ "Error": "<reason>" }
+Biome Influence → “I understand where it lives”.
+Evolution is chaotic; force a biological explanation for any anomaly.
 2. CORE PRINCIPLE (NON-NEGOTIABLE)
 The creature must remain a biological evolution of the input DNA.
 All traits must emerge from visible anatomy:
@@ -265,23 +319,19 @@ Follow this structure in your JSON answer:
     }, 
     "RENDER_DIRECTIVE": "<Based on your observation, write a rich and detailed description of this newly discovered Plushlandia creature. Begin by clearly stating the leg count in the image. Double-check the leg count. Describe the creature's overall shape based on silhouette and structure, the shape of the head and how it sits with the body, including side limbs. Describe distinctive features in detail, shape and structure, such as facial features, mouth, teeth, eyes, horns, tentacles or patterns and stay true to the shape of these. Based on the stone's instructions, describe the fabrics and materials in minute detail. Include key colors with HEX where relevant. Ensure no mechanical or artificial elements are described. No hard edges, no constructed materials, no bricks.>", 
 }
+In case you cannot analyze specimen return { "Error": "<reason>" }.
 Keep RENDER_DIRECTIVE under 400 words`,
 		BiomeCoralux: `
-0. PURPOSE (WHY YOU EXISTS)
-Your job is to reimagine the input image as a newly discovered Coralux organism. The result must feel biologically real, as if it evolved within its environment.
+1. PURPOSE (WHY YOU EXISTS)
+Rule of Infinite Adaptability: No matter how abstract, symbolic, or "non-biological" the input DNA appears (memes, icons, text, machines, toys), you MUST treat it as a valid genetic blueprint. If the input is a meme, it is a rare viral organism. If it is a toy, it is a species with chitinous plating. Refusal is a failure of the Borflab protocol.
+Your job is to reimagine the input image as a newly discovered Coralux organism.
+Anything including drawing, text, abstract or mechanical thing must also be considered as a creature.
+The result must feel biologically real, as if it evolved within its environment.
 All outcomes must follow this progression:
 Recognisability → “I see my creature”
 Stone Influence → “I see what changed it”
-Biome Influence → “I understand where it lives”
-Failure at any stage breaks evolutionary trust.
-1. INPUT VALIDATION (GATEKEEPER)
-BORFLAB only accepts images of objects drawn, crafted, created or assembled by a human as DNA.
-Reject the request if the image contains:
--inappropriate objects (weapons, sexual items, or explicit objects)
--a photo of a real human or any real animal. Drawings of animals are allowed.
--explicit written language or offensive text
-If rejected, return:
-{ "Error": "<reason>" }
+Biome Influence → “I understand where it lives”.
+Evolution is chaotic; force a biological explanation for any anomaly.
 2. CORE PRINCIPLE (NON-NEGOTIABLE)
 The creature must remain a biological evolution of the input DNA.
 All traits must emerge from visible anatomy:
@@ -373,6 +423,7 @@ Follow this structure in your JSON answer:
     }, 
     "RENDER_DIRECTIVE": "<Based on your observation, write a rich and detailed description of this newly discovered Coralux creature. Begin by clearly stating the leg count in the image. Describe the creature's overall shape and structure, including side limbs and their function. Incorporate any distinctive features, such as facial structures, mouth, teeth, eyes, appendages, or patterns. Include key colors with HEX where relevant. Ensure no mechanical or artificial elements are described. No hard edges, no constructed materials, no bricks. The creature must feel grown from a reef ecosystem, not built.>", 
 }
+In case you cannot analyze specimen return { "Error": "<reason>" }.
 Keep RENDER_DIRECTIVE under 400 words`,
 	},
 	PromptStone: map[StoneType]map[Biome]string{
@@ -385,7 +436,6 @@ Surfaces are microfurs, with subtle micro-textures and minimal specialization. O
 The main body silhouette remains fully readable and structured, without exaggeration or added growth.
 Neutral wood tones blend with original DNA colors through soft gradients, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in muted natural tones.
 Appendages retain clear anatomical structure, fully functional for ground-dwelling creatures
-Size guide (Hight < 0,4 m, Weight: <1 kg)
 BEHAVIOUR
 Observe → steady awareness. Move → cautious, controlled motion. Adapt → responds without extremes
 ABILITY: 
@@ -399,7 +449,6 @@ Surfaces of finely woven cotton fabrics, like college sweaters, with visible sea
 The main bodys silhouette remains balanced and uncluttered, not overdesigned or obscured.
 Greys and white form the base, blending with original DNA colors through clear panel separation and subtle gradients, never overly complex or dominant. If not color in DNA, add one bold contrasting color. 
 Appendages retain clear anatomical structure, with visible joins and straightforward construction.
-Size guide (Hight < 0,7 m, Weight: <6kg)
 BEHAVIOUR
 Observe → steady, attentive presence. Adjust → small, practical corrections. Maintain → consistent, reliable movement
 ABILITY
@@ -411,7 +460,6 @@ Surfaces are smooth, natural, and clean, with minimal specialization or exaggera
 The main body remains fully readable and structured, without added growth, armor, or distortion.
 Neutral and natural tones blend with original DNA colors through soft gradients, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in soft aquatic tones.
 Appendages retain clear anatomical structure, with simple, functional forms and no specialization.
-Size guide (Hight < 0,6 m, Weight: <2kg)
 BEHAVIOUR
 Balanced → steady movement and awareness. Observe → reacts without urgency. Adapt → adjusts without extremes
 ABILITY
@@ -427,7 +475,6 @@ Surfaces are smooth with microbubbles and folds, moist, and slightly translucent
 Structure remains soft but clearly defined, maintaining the original DNA silhouette form. Organic dart frog-like or lizard-like patterns appear as warning-like markings.
 The main body silhouette remains readable and structured, not dissolved or fragmented. Indigo and violet tones are the base color and blend with original DNA colors through glow and gradients, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in bright contrasting tones. 
 Appendages retain clear anatomical structure, often soft and flexible with defined function.
-Size guide (Hight < 0,4 m, Weight: <5 kg)
 BEHAVIOUR;
 Still → waits and observes. Flash → signals or reacts suddenly. Retreat → withdraws quickly when threatened
 ABILITY
@@ -440,7 +487,6 @@ Surfaces resemble technical fabrics with visible construction: contrasting seams
 The body silhouette remains clean and readable, not cluttered with unnecessary elements.
 Bright indigo and purple, high-contrast tones blend with original DNA colors through panels and functional zones. If not color exist, ad neon complimentary color.
 Appendages retain structure, enhanced with straps, grips textures, or engineered and reinforced sections, always functional.
-Size guide (Hight < 1 m, Weight: <7kg)
 BEHAVIOUR
 Scan → constant awareness. Adjust → micro-corrections in movement. Execute → fast, efficient action
 ABILITY
@@ -453,7 +499,6 @@ Surfaces are semi-translucent and gel-like, with internal light visible as soft 
 The main body remains readable and structured, not dissolved or fragmented.
 Indigo and violet tones are the base color and blend with original DNA colors through internal glow and gradients, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in soft blues or pinks.
 Appendages retain clear anatomical structure, appearing as soft extensions or flowing forms with a clear function.
-Size guide (Hight < 0,8 m, Weight: <3kg)
 BEHAVIOUR
 Drift → slow, controlled movement. Pulse → reacts through energy shifts. Withdraw → fades or stills when threatened
 ABILITY
@@ -468,7 +513,6 @@ Surfaces show reinforced, chitin-like structures in key areas such as forelimbs,
 The main body remains readable and structured, with clear separation between soft and hardened regions. 
 Crimson and ember tones are the base color and blend with original DNA colors through gradients and layered pigmentation, with petroleum-like effects, never isolated or dominant across the entire body. If no color exists from DNA, YOU HAVE  TO provide a complementary color: blue, green, or purple.
 Appendages retain a clear anatomical structure, with specific limbs adapted for gripping, striking, or holding a position. Sensory antennas or filaments. 
-Size guide (Hight < 0,2 m, Weight: <0,2 kg)
 BEHAVIOUR
 Still → locks into position. Track → detects movement and timing. Strike → releases sudden, precise force
 ABILITY
@@ -481,7 +525,6 @@ Surfaces resemble treated leather and protective materials, with clear paneling 
 The main body silhouette remains structured and segmented, not overdesigned or layered.
 Deep reds, blacks, and ember tones dominate, blending with original DNA colors through panels and material transitions, never overwhelming the full body. If no color in DNA ad contrasting white.
 Appendages retain strong anatomical clarity, with visible joint reinforcement and protective shaping.
-Size guide (Hight <1,6 m, Weight: <20kg)
 BEHAVIOUR
 Hold → grounded, stable stance. Test → subtle shifts, tension building. Strike → explosive, controlled release
 ABILITY
@@ -494,7 +537,6 @@ Surfaces show clear crustacean structure. Hardened smooth shell forms the outer 
 The main body remains readable and structured, not overgrown or obscured with subtle jagged edges. 
 Crimson and ember tones are the base color and blend with original DNA colors through gradients and layered pigmentation, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in greens or blues. 
 Appendages retain clear anatomical structure, with visible joints and purpose.
-Size guide (Hight < 1 m, Weight: <10kg)
 BEHAVIOUR:
 Hold position → anchored, observing Sense → vibration and environmental shifts Respond → immediate, precise action
 ABILITY:
@@ -509,7 +551,6 @@ Surfaces show layered, banded, irregular structures resembling growth and accumu
 The main body silhouette remains fully readable and structured, with irregular micro textures to blur sharp lines.
 Neutral wood and stone tones blend with original DNA colors through soft gradients and spotted color variations, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in muted natural tones.
 Appendages retain clear anatomical structure, fully functional for adaptable creatures
-Size guide (Hight < 2 m, Weight: <100 kg)
 BEHAVIOUR
 Anchor → holds position. Endure → absorbs impact. Mimic → blends into the environment
 ABILITY
@@ -522,7 +563,6 @@ Surfaces from minimum two craft techniques, knitted, woven, stitched, and applie
 The bodys silhouette remains clearly defined, not sagging or collapsing.
 Earth tones and naturall plant dyed colors blend with original DNA colors through yarn variation and subtle patterning. If no color exists, use warm earth tones as contrast. 
 Appendages retain structure, with visible knit tension at joints and bends.
-Size guide (Hight < 1,4 m, Weight: <5kg)
 BEHAVIOUR
 Hold → grounded, steady presence. Flex → slow, responsive adjustment. Endure → maintains form under pressure
 ABILITY
@@ -535,7 +575,6 @@ Bodies have a seahorse-influenced appearance, often ending in a coiled or prehen
 The main body silhouette remains readable, with structure emphasized through repetition of segments, rings, or plates. "
 Earthy mineral tones are the base color, banded browns, ambers, ochres, blended with original DNA colors through soft gradients and layered pigmentation, never isolated or dominant across the entire body. If no color exists from DNA, introduce muted stone-like neutrals. Surface is matte, with fine micro-textures resembling calcified skin or mineral deposits. 
 Appendages retain clear anatomical structure, appearing refined and purposeful, often smaller and more precise. Tails or rear structures may show gripping function.
-Size guide (Hight < 0,3 m, Weight: <0,5kg)
 BEHAVIOUR
 Anchor → grips surfaces using tail or body tension. Observe → remains still, scanning with subtle adjustments. Shift → slow, precise repositioning rather than sudden movement
 ABILITY
@@ -550,8 +589,6 @@ Surfaces are light and refined, with delicate structures and translucent or patt
 The main body silhouette remains readable and structured, not obscured by wings or patterns.
 Blue and high-contrast tones are the base color and blend with original DNA colors through gradients and wing patterns, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in bright or iridescent tones.
 Appendages retain clear anatomical structure, with wings clearly defined and functional.
-Height and weight reference: Sub 20 cm and Sub 0,5 kg
-Size guide (Hight < 0,6 m, Weight: <4 kg)
 BEHAVIOUR
 Hover → maintains controlled position. Shift → changes direction rapidly. Land → precise, controlled contact
 ABILITY
@@ -564,7 +601,6 @@ Surfaces are 100 percent denim fabrics with visible twill texture and structured
 The main bodys silhouette remains clear and structured, not overdesigned or fragmented.
 Sapphire blue tones form the base, blending with original DNA colors through washes, fades, and layered pigmentation, often appearing as worn or dyed variations rather than clean blocks. If no color exists in DNA, use different shades of Denim. Edges may appear frayed, reinforced, or sharply cut depending on the function. 
 Appendages retain clear anatomical structure, with strengthened joints, stitched reinforcements, and defined gripping or striking forms.
-Size guide (Hight <1,8 m, Weight: < 30kg)
 BEHAVIOUR
 Move → constant, fluid motion. Adapt → adjusts through repetition and wear. React → fast, directional bursts
 ABILITY
@@ -577,8 +613,6 @@ Surfaces are smooth and hydrodynamic, with flowing lines and minimal resistance.
 The main body remains readable and structured, not broken by excessive detail or texture.
 Deep blue and high-contrast tones are the base color and blend with original DNA colors through gradients and sharp transitions, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in cool aquatic tones.
 Appendages retain clear anatomical structure, shaped for precision, speed, and control.
-Height and weight reference: Sub 100 cm and Sub 30 kg
-Size guide (Hight < 0,9 m, Weight: <30kg)
 BEHAVIOUR
 Glide → continuous, efficient movement. Read → anticipates flow and change. Shift → adjusts direction instantly
 ABILITY
@@ -593,7 +627,6 @@ Surfaces display strong, high-contrast micro feather patterns with radiant color
 The main body silhouette remains readable and structured, not overwhelmed by pattern density.
 Yellow, gold, and radiant tones are the base color and blend with original DNA colors through high-contrast patterns, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in vivid tones.
 Appendages retain clear anatomical structure, often emphasized through color and display.
-Size guide (Hight < 0,8 m, Weight: <4 kg)
 BEHAVIOUR
 Display → attracts attention. Signal → communicates visually. Distract → disrupts focus of others
 ABILITY
@@ -606,7 +639,6 @@ Surfaces resemble fine fabrics and embellished materials such as silk, satin, an
 The main body remains clearly structured, not obscured by decoration.
 Golden, amber, and sunlit tones form the base, blending with original DNA colors through shimmer, reflection, and layered surface detailing, never flat or muted. If no color exists in DNA add royal blue as contrast in defined areas (max 10% of surface). Patterns are expressive and intentional, often symmetrical or radiating outward.
 Appendages retain clear anatomical structure, enhanced with extended edges, flared shapes, or detailed finishes that amplify visibility and presence.
-Size guide (Hight < 2 m, Weight: <40kg)
 BEHAVIOUR
 Display → draws attention through movement and light. Signal → communicates through flashes and pattern shifts. Overwhelm → disrupts focus through intensity
 ABILITY
@@ -619,7 +651,6 @@ Surfaces display bold, high-contrast patterns with luminous accents. Structure r
 The main body remains readable and structured, not overwhelmed by pattern density.
 Yellow, gold, and radiant tones are the base color and blend with original DNA colors through high-contrast patterning, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in vibrant reef tones.
 Appendages retain clear anatomical structure, often emphasized through color or pattern for visibility.
-Size guide (Hight < 0,4 m, Weight: <6kg)
 BEHAVIOUR: 
 Display → draws attention immediately. Signal → communicates through movement and light. Disrupt → distracts or confuses threats
 ABILITY: 
@@ -633,7 +664,6 @@ APPEARANCE: Surfaces made up of smooth micro fur, with occasional longer thin fu
 The main body silhouette remains readable and structured, not obscured by constant patterning. 
 Canopy green and muted tones are the base color and blend with original DNA colors through soft gradients and controlled shifts, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in deep natural tones. 
 Appendages retain clear anatomical structure, designed for grip, control, and precision.  
-Size guide (Hight < 1,6 m, Weight: <50 kg)
 BEHAVIOUR
 Observe → remains aware and calm. Choose → acts with intention. Adapt → responds to change
 ABILITY
@@ -647,7 +677,6 @@ The main body silhouette remains readable and structured. Panel structure follow
 Seams are precise and minimal, running along natural panel edges. They guide the structure rather than decorate it. Surface quality is refined and slightly reflective, with a soft silk sheen that enhances form without adding texture noise.
 Color is anchored in jade greens, blended with cream, ivory, muted gold, or deep natural tones. DNA colors are integrated as panel shifts or controlled gradients, following the structure of the form."
 Appendages are clean and purposeful, shaped through smooth tapering and continuous surface flow, with no interruption to the overall structure.
-Size guide (Hight < 2,2 m, Weight: <60kg)
 BEHAVIOUR
 Hold → maintains position with quiet authority Observe → aware without reacting unnecessarily Stabilize → presence reduces movement and disorder nearby
 ABILITY
@@ -660,7 +689,6 @@ Surfaces are smooth and responsive, with subtle pattern shifts and controlled te
 The main body remains readable and structured, with organic patterning. 
 Green and muted tones are the base color and blend with original DNA colors through soft gradients and controlled shifts, never isolated or dominant across the entire body. If no color exists from DNA, provide a complementary color in deep blues or purples.
 Appendages retain clear anatomical structure, designed for precision, control, and adaptability.
-Size guide (Hight < 0,8 m, Weight: <12kg)
 BEHAVIOUR
 Observe → remains calm and aware. Adapt → changes in response to environment. Engage → acts only when necessary
 ABILITY

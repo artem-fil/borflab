@@ -1,14 +1,17 @@
 import { PublicKey, clusterApiUrl } from "@solana/web3.js";
 
 import agate from "@images/agate.png";
-import jade from "@images/jade.png";
-import topaz from "@images/topaz.png";
-import quartz from "@images/quartz.png";
-import sapphire from "@images/sapphire.png";
 import amazonite from "@images/amazonite.png";
-import ruby from "@images/ruby.png";
+import canopicaImg from "@images/canopica.png";
+import coraluxImg from "@images/coralux.png";
+import jade from "@images/jade.png";
 import pack10 from "@images/pack10.png";
 import pack25 from "@images/pack25.png";
+import plushlandImg from "@images/plushland.png";
+import quartz from "@images/quartz.png";
+import ruby from "@images/ruby.png";
+import sapphire from "@images/sapphire.png";
+import topaz from "@images/topaz.png";
 
 const CLUSTER = "devnet";
 
@@ -120,19 +123,22 @@ export const RARITIES = {
 
 export const BIOMES = {
     amazonia: {
-        bg: `bg-green-700`,
-        border: `border-green-700`,
-        text: `text-green-700`,
+        bg: `bg-canopica-dark`,
+        border: `border-canopica-dark`,
+        text: `text-canopica-dark`,
+        icon: canopicaImg,
     },
     plushland: {
-        bg: `bg-pink-700`,
-        border: `border-pink-700`,
-        text: `text-pink-700`,
+        bg: `bg-plushland-dark`,
+        border: `border-plushland-dark`,
+        text: `text-plushland-dark`,
+        icon: plushlandImg,
     },
     coralux: {
-        bg: `bg-cyan-700`,
-        border: `border-cyan-700`,
-        text: `text-cyan-700`,
+        bg: `bg-coralux-dark`,
+        border: `border-coralux-dark`,
+        text: `text-coralux-dark`,
+        icon: coraluxImg,
     },
 };
 

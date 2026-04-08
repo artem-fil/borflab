@@ -2,13 +2,30 @@ export default {
     content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
     theme: {
         extend: {
+            colors: {
+                coralux: {
+                    dark: "#517E8C",
+                    light: "#5EA1B0",
+                },
+                plushland: {
+                    dark: "#4F294F",
+                    light: "#8B618B",
+                },
+                canopica: {
+                    dark: "#5D643A",
+                    light: "#95A05D",
+                },
+                accent: "#ED9B00",
+            },
             backgroundImage: {
                 app: "url('/background.webp')",
                 metal: "url('/metal.jpeg')",
-                foam: "url('/foam.jpeg')",
+                paper: "url('/paper2.jpg')",
             },
             fontFamily: {
+                exo: ['"Exo 2"', "sans-serif"],
                 plex: ['"IBM Plex Mono"', "monospace"],
+                special: ['"Special Elite"', "system-ui", "serif"],
             },
             keyframes: {
                 scan: {

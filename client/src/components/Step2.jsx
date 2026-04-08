@@ -2,6 +2,7 @@ import cardbackImg from "@images/card-back.png";
 import cardfrontImg from "@images/card-front.png";
 import poster3Img from "@images/poster03.png";
 import transmutatorImg from "@images/transmutator.png";
+import watermarkImg from "@images/watermark.png";
 import { useWallets } from "@privy-io/react-auth/solana";
 import labSound from "@sounds/lab.ogg";
 import printerSound from "@sounds/printer.ogg";
@@ -331,7 +332,7 @@ export default function Step2({ current, specimen, stone, biome }) {
 
         if (backCardRef.current) {
             backCardRef.current.style.transitionDuration = `${BACK_OUT_DURATION}ms`;
-            backCardRef.current.style.transform = "translateY(100%)";
+            //backCardRef.current.style.transform = "translateY(100%)";
         }
 
         if (frontCardRef.current) {
@@ -361,7 +362,7 @@ export default function Step2({ current, specimen, stone, biome }) {
         return queueRef.current;
     }
 
-    const { bg, text, border } = BIOMES[biome] || {};
+    const { bg, text, border, icon } = BIOMES[biome] || {};
 
     return (
         <div className="flex flex-col h-full justify-end px-4">
@@ -416,46 +417,74 @@ export default function Step2({ current, specimen, stone, biome }) {
                     {/* Back Card: Analysis Report */}
                     <div
                         ref={backCardRef}
-                        className={`box-border w-full absolute ${text} text-xs p-1 transition-all ease-out`}
-                        style={{ transform: "translateY(100%)", aspectRatio: "0.62 / 1", fontSize: "10px" }}
+                        className={`box-border w-full absolute ${text} p-1 transition-all ease-out`}
+                        style={{ transform: "translateY(0)", aspectRatio: "0.62 / 1" }}
                     >
                         <img className="absolute inset-0 w-full h-full" src={cardbackImg} alt="card back" />
                         <div className="relative p-0.5 pb-5 w-full h-full">
                             <div
-                                className={`relative flex flex-col border-4 rounded-xl w-full h-full ${border} bg-orange-100`}
+                                className="absolute rounded-2xl mx-0.5 mb-5 mt-0.5 bg-paper inset-0 z-10"
+                                style={{
+                                    backgroundSize: "cover",
+                                    mixBlendMode: "multiply",
+                                    opacity: 1,
+                                }}
+                            />
+                            <div
+                                className={`z-0 text-[8px] relative flex flex-col border-4 rounded-xl w-full ring-orange-50 ring-1 h-full ${border} bg-orange-50`}
                             >
-                                <p className="p-px text-center uppercase">Specimen Analysis</p>
-                                <hr className={`border-0 h-0.5 ${bg}`} />
-                                <div className="flex w-full items-center">
-                                    <div className="h-20 w-8/12 flex">
-                                        {previewUrl && (
-                                            <img src={previewUrl} className="m-auto rounded h-full object-cover" />
-                                        )}
+                                <p className="text-center p-px leading-none text-accent">SPECIMEN ANALYSIS LOG</p>
+                                <hr className={`border-0 h-px ${bg}`} />
+                                <div className=" flex w-full items-center">
+                                    <div className=" flex items-center p-1 h-18 w-1/3">
+                                        <img
+                                            src={previewUrl}
+                                            className="ml-auto mr-auto rounded object-cover"
+                                            alt="input image"
+                                        />
                                     </div>
-                                    <div className={`w-0.5 h-full ${bg}`} />
-                                    <div className="py-1 w-4/12 flex flex-col gap-1">
-                                        <img src={STONES[stone?.Type]?.image} className="object-cover" />
-                                        <strong className="mx-1 text-center uppercase py-px bg-red-800 text-white">
-                                            common
-                                        </strong>
+                                    <div className={`border-0 w-px h-full ${bg}`} />
+                                    <div
+                                        className={`uppercase p-1 font-special w-2/3 h-18 flex flex-col justify-between ${text}`}
+                                    >
+                                        <p>ISSUE DATE: {`${new Date().toLocaleDateString()}`}</p>
+                                        <p>SPIRAL INDEX: </p>
+                                        <p>[23/840K BORF’S]</p>
+                                        <p>[23/840K {stone?.Type}]</p>
+                                        <p>[{biome}: 001]</p>
                                     </div>
                                 </div>
+                                <hr className={`border-0 h-px ${bg}`} />
+                                <p className=" leading-none p-px ">
+                                    <strong className={`uppercase  ${text}`}>BORFOLOGIST ID: </strong>
+                                    PSM-001
+                                </p>
+                                <strong className={`p-0.5 ${bg} text-orange-50 uppercase`}>borf profile</strong>
+                                <div className="p-0.5">
+                                    <strong className={`${text} uppercase`}>01. observation: </strong>
+                                    <p className="text-black leading-tight font-special">
+                                        {analyzeResult?.MONSTER_PROFILE?.lore}
+                                    </p>
+                                </div>
                                 <hr className={`border-0 h-0.5 ${bg}`} />
-                                <div className="px-1 leading-tight text-[9px]">
-                                    <p>
-                                        <strong>BORFOLOGIST:</strong> PSM-001
+                                <div className="p-0.5">
+                                    <strong className={`${text} uppercase`}>02. personality: </strong>
+                                    <p className="text-black leading-tight font-special">
+                                        {analyzeResult?.MONSTER_PROFILE?.personality}
                                     </p>
-                                    <hr className={`border-0 h-0.5 ${bg}`} />
-                                    <p>
-                                        <strong>SPIRAL:</strong> {`[${biome}]`}
+                                </div>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <div className=" p-0.5">
+                                    <strong className={`${text} uppercase`}>03. abilities: </strong>
+                                    <p className="text-black leading-tight font-special">
+                                        {analyzeResult?.MONSTER_PROFILE?.abilities}
                                     </p>
-                                    <hr className={`border-0 h-0.5 ${bg}`} />
-                                    <p>
-                                        <strong>MOVE:</strong> {analyzeResult?.MONSTER_PROFILE?.movement_class}
-                                    </p>
-                                    <hr className={`border-0 h-0.5 ${bg}`} />
-                                    <p>
-                                        <strong>BEHAVIOUR:</strong> {analyzeResult?.MONSTER_PROFILE?.behaviour}
+                                </div>
+                                <hr className={`border-0 h-0.5 ${bg}`} />
+                                <div className="p-0.5">
+                                    <strong className={`${text} uppercase`}>04. habitat: </strong>
+                                    <p className="text-black leading-tight font-special">
+                                        {analyzeResult?.MONSTER_PROFILE?.habitat}
                                     </p>
                                 </div>
                             </div>
@@ -465,69 +494,98 @@ export default function Step2({ current, specimen, stone, biome }) {
                     {/* Front Card: Result */}
                     <div
                         ref={frontCardRef}
-                        className={`box-border w-full absolute ${text} text-xs p-1 transition-all ease-out pointer-events-auto`}
+                        className={`text-[8px] box-border w-full absolute ${text} p-1 transition-all ease-out pointer-events-auto`}
                         style={{ transform: "translateY(100%)", aspectRatio: "0.62 / 1" }}
                     >
                         <Link to="/library">
                             <img className="absolute inset-0 w-full h-full" src={cardfrontImg} alt="card front" />
-                            <div className="relative p-0.5 pb-5 w-full h-full">
+                            <div className="relative p-0.5 pb-5 w-full h-full ">
                                 <div
-                                    className={`flex flex-col w-full h-full rounded-xl border-4 ${border} bg-orange-100`}
+                                    className="absolute rounded-xl mx-0.5 mb-5 mt-0.5 bg-paper inset-0 z-10"
+                                    style={{
+                                        backgroundSize: "cover",
+                                        mixBlendMode: "multiply",
+                                        opacity: 1,
+                                    }}
+                                />
+                                <div
+                                    className={`relative flex flex-col w-full h-full rounded-xl border-4 ring-orange-50 ring-1 ${border} bg-orange-50`}
                                 >
-                                    <p className="uppercase text-center text-[6px]">
-                                        borflab // <strong>top secret</strong>
-                                    </p>
-                                    <hr className={`border-0 h-0.5 ${bg}`} />
-                                    {/* в блоке с картинкой монстра — убрать overflow-hidden с родителя */}
-                                    <div className="flex-grow flex p-1 relative overflow-visible">
-                                        {image && (
-                                            <div className="relative h-full">
-                                                {/* комикс-бабл */}
-                                                {bubble && (
-                                                    <div
-                                                        className="absolute -top-6 left-1/2 -translate-x-1/2 z-50 bg-white border-2 border-black rounded-xl px-2 py-1 text-black text-[9px] font-bold uppercase whitespace-nowrap shadow-md"
-                                                        style={{
-                                                            filter: "drop-shadow(1px 1px 0 black)",
-                                                        }}
-                                                    >
-                                                        {bubble}
-                                                        {/* хвостик бабла */}
-                                                        <div
-                                                            className="absolute left-1/2 -translate-x-1/2 -bottom-2 w-0 h-0"
-                                                            style={{
-                                                                borderLeft: "5px solid transparent",
-                                                                borderRight: "5px solid transparent",
-                                                                borderTop: "8px solid black",
-                                                            }}
-                                                        />
-                                                        <div
-                                                            className="absolute left-1/2 -translate-x-1/2 -bottom-1.5 w-0 h-0"
-                                                            style={{
-                                                                borderLeft: "4px solid transparent",
-                                                                borderRight: "4px solid transparent",
-                                                                borderTop: "7px solid white",
-                                                            }}
-                                                        />
-                                                    </div>
-                                                )}
-                                                <img
-                                                    src={`data:image/png;base64,${image}`}
-                                                    className="mx-auto h-full w-full object-contain"
-                                                    style={{
-                                                        animation: mintSuccess ? "escape 3.5s infinite" : "",
-                                                    }}
-                                                />
-                                            </div>
-                                        )}
+                                    <div className="p-0.5 uppercase">
+                                        <p className="leading-tight">borflab exo-bio division</p>
+                                        <p className="leading-tight">security class: top secret</p>
+                                        <p className="leading-tight">document type: specimen data card</p>
                                     </div>
                                     <hr className={`border-0 h-0.5 ${bg}`} />
-                                    <div className="p-1">
-                                        <h1 className="font-bold text-[10px] uppercase truncate">
-                                            {analyzeResult?.MONSTER_PROFILE?.name}
-                                        </h1>
-                                        <p className="text-[9px] italic leading-none mt-0.5">
-                                            {analyzeResult?.MONSTER_PROFILE?.lore}
-                                        </p>
+                                    {image && (
+                                        <div className="relative flex-grow flex p-0.5">
+                                            {bubble && (
+                                                <div
+                                                    className="absolute -top-6 left-1/2 -translate-x-1/2 z-50 bg-white border-2 border-black rounded-xl px-2 py-1 text-black text-[9px] font-bold uppercase whitespace-nowrap shadow-md"
+                                                    style={{
+                                                        filter: "drop-shadow(1px 1px 0 black)",
+                                                    }}
+                                                >
+                                                    {bubble}
+                                                    {/* хвостик бабла */}
+                                                    <div
+                                                        className="absolute left-1/2 -translate-x-1/2 -bottom-2 w-0 h-0"
+                                                        style={{
+                                                            borderLeft: "5px solid transparent",
+                                                            borderRight: "5px solid transparent",
+                                                            borderTop: "8px solid black",
+                                                        }}
+                                                    />
+                                                    <div
+                                                        className="absolute left-1/2 -translate-x-1/2 -bottom-1.5 w-0 h-0"
+                                                        style={{
+                                                            borderLeft: "4px solid transparent",
+                                                            borderRight: "4px solid transparent",
+                                                            borderTop: "7px solid white",
+                                                        }}
+                                                    />
+                                                </div>
+                                            )}
+                                            <img
+                                                src={`data:image/png;base64,${image}`}
+                                                className="max-h-full max-w-full w-auto h-auto object-contain mr-auto ml-auto z-10"
+                                                style={{
+                                                    animation: mintSuccess ? "escape 3.5s infinite" : "",
+                                                }}
+                                                alt="output"
+                                            />
+                                            <img
+                                                src={watermarkImg}
+                                                className="absolute right-0 w-2/3 top-0"
+                                                alt="watermark"
+                                            />
+                                        </div>
+                                    )}
+
+                                    <hr className={`border-0 h-0.5 ${bg}`} />
+                                    <div className="flex items-center">
+                                        <div className="flex flex-col gap-2 p-1 grow text-xs ">
+                                            <p className="flex gap-2 items-baseline">
+                                                ID:
+                                                <span
+                                                    className={`leading-none grow border-b ${border} uppercase  font-special text-black`}
+                                                >
+                                                    {analyzeResult?.MONSTER_PROFILE?.name}
+                                                </span>
+                                            </p>
+                                        </div>
+                                        <hr className={`w-0.5 h-10 ${bg}`} />
+                                        <div className="p-1 w-10 h-10">
+                                            <img src={STONES[stone?.Type]?.image} className="w-full" alt="borfstone" />
+                                        </div>
+                                    </div>
+                                    <div
+                                        className={`rounded-b-md flex text-xs items-center gap-2 p-0.5 uppercase text-orange-50 ${bg}`}
+                                    >
+                                        <img src={icon} className="w-8 opacity-50" alt="" />
+                                        <span>
+                                            biome: <strong className="font-bold text-accent">{biome}</strong>
+                                        </span>
                                     </div>
                                 </div>
                             </div>

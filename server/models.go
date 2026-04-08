@@ -144,6 +144,8 @@ type Monster struct {
 
 	// === profile ===
 	Name          string
+	Height        int
+	Weight        int
 	Species       string
 	Lore          string
 	MovementClass string
@@ -194,6 +196,13 @@ type Purchase struct {
 	Payload  json.RawMessage `json:"-"`
 	Created  time.Time
 	Opened   *time.Time
+}
+
+type SizeRange struct {
+    MinHeightCm int
+    MaxHeightCm int
+    MinWeightG  int
+    MaxWeightG  int
 }
 
 func (stats *RarityStats) PickRarity(stone StoneType) Rarity {
