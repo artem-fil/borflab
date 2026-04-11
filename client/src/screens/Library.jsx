@@ -205,9 +205,7 @@ export default function Library() {
                         ))}
                     <div className="flex flex-col ml-2">
                         <strong className="text-sm leading-tight font-bold uppercase">BORFOLIGICAL</strong>
-                        <span className="text-xs" leading-tight>
-                            specimen tray no.{" "}
-                        </span>
+                        <span className="text-xs">specimen tray no. </span>
                     </div>
                 </div>
 

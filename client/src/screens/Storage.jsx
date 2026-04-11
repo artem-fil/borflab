@@ -1,44 +1,26 @@
-import { Connection, Transaction } from "@solana/web3.js";
-
-import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
-
-import { useEffect, useState, useRef } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import Stone from "@components/Stone";
 import Button from "@components/Button";
+import Stone from "@components/Stone";
 
-import storageImage from "@images/storage.jpg";
 import agateImage from "@images/agate.png";
-import jadeImage from "@images/jade.png";
-import topazImage from "@images/topaz.png";
-import quartzImage from "@images/quartz.png";
-import sapphireImage from "@images/sapphire.png";
 import amazoniteImage from "@images/amazonite.png";
+import jadeImage from "@images/jade.png";
+import quartzImage from "@images/quartz.png";
 import rubyImage from "@images/ruby.png";
+import sapphireImage from "@images/sapphire.png";
+import storageImage from "@images/storage.jpg";
+import topazImage from "@images/topaz.png";
 
 import api from "../api";
 
-const ENDPOINT = "https://api.devnet.solana.com";
-
 export default function Storage() {
-    const { wallets } = useWallets();
-    const { signTransaction } = useSignTransaction();
-    const storedWallet = localStorage.getItem("primaryWallet");
-    const solanaWallet = wallets.find((w) => w.address === storedWallet) || wallets[0];
     const navigate = useNavigate();
     const [sparkCount, setSparkCount] = useState(0);
     const [stoneDialog, setStoneDialog] = useState(false);
     const [availableStones, setAvailableStones] = useState({});
     const [loading, setLoading] = useState(true);
-    const [preparing, setIsPreparing] = useState(false);
-    const [minting, setIsMinting] = useState(false);
-    const [mintSuccess, setMintSuccess] = useState(false);
-    const [mintError, setMintError] = useState(false);
-    const mintSSERef = useRef(null);
-    const mintTimeoutRef = useRef(null);
-    const mintFinishedRef = useRef(false);
 
     useEffect(() => {
         loadStonesData();
@@ -47,21 +29,20 @@ export default function Storage() {
     async function loadStonesData() {
         setLoading(true);
         try {
-            let sum = 0;
+            const { Stones } = await api.getStones();
 
-            const stones = await api.getStones();
-            const s = {};
-
-            for (let stone of stones) {
-                s[stone.Type] = stone.SparkCount;
-                sum += stone.SparkCount;
+            if (!Stones) {
+                throw new Error("Laboratory data corruption: Stones not found in API response");
             }
-            setSparkCount(sum);
 
-            setAvailableStones(s);
+            const totalSparks = Object.values(Stones).reduce((acc, count) => acc + count, 0);
+
+            setSparkCount(totalSparks);
+            setAvailableStones(Stones);
         } catch (error) {
             console.error("Error loading stones data:", error);
             setAvailableStones({});
+            throw error;
         } finally {
             setLoading(false);
         }
@@ -101,7 +82,7 @@ export default function Storage() {
                             onClick={() => setStoneDialog("Agate")}
                         />
                         <div
-                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-lime-500"
+                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-primary"
                             style={{
                                 top: "51%",
                                 left: "39.5%",
@@ -126,7 +107,7 @@ export default function Storage() {
                             onClick={() => setStoneDialog("Jade")}
                         />
                         <div
-                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-lime-500"
+                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-primary"
                             style={{
                                 top: "38%",
                                 left: "66%",
@@ -151,7 +132,7 @@ export default function Storage() {
                             onClick={() => setStoneDialog("Topaz")}
                         />
                         <div
-                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-lime-500"
+                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-primary"
                             style={{
                                 top: "75.7%",
                                 left: "39.5%",
@@ -176,7 +157,7 @@ export default function Storage() {
                             onClick={() => setStoneDialog("Quartz")}
                         />
                         <div
-                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-lime-500"
+                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-primary"
                             style={{
                                 top: "26.7%",
                                 left: "10.6%",
@@ -201,7 +182,7 @@ export default function Storage() {
                             onClick={() => setStoneDialog("Sapphire")}
                         />
                         <div
-                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-lime-500"
+                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-primary"
                             style={{
                                 top: "75.7%",
                                 left: "10.6%",
@@ -226,7 +207,7 @@ export default function Storage() {
                             onClick={() => setStoneDialog("Amazonite")}
                         />
                         <div
-                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-lime-500"
+                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-primary"
                             style={{
                                 top: "26.7%",
                                 left: "39.5%",
@@ -251,7 +232,7 @@ export default function Storage() {
                             onClick={() => setStoneDialog("Ruby")}
                         />
                         <div
-                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-lime-500"
+                            className="flex flex-col gap-0.5 leading-none absolute text-xs text-primary"
                             style={{
                                 top: "51%",
                                 left: "10.6%",
@@ -265,7 +246,7 @@ export default function Storage() {
                             </div>
                         </div>
                         <div
-                            className="uppercase leading-none absolute text-xs text-lime-500"
+                            className="uppercase leading-none absolute text-xs text-primary"
                             style={{
                                 top: "86%",
                                 left: "10.6%",
@@ -289,66 +270,6 @@ export default function Storage() {
             <div className="py-2">
                 <Button onClick={() => navigate("/lab")} alt label={"go lab"} />
             </div>
-            {preparing &&
-                createPortal(
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-                        <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
-                            <svg
-                                className="animate-spin h-10 w-10 mb-4 text-white"
-                                xmlns="http://www.w3.org/2000/svg"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    className="opacity-75"
-                                    fill="currentColor"
-                                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                                />
-                            </svg>
-                            <span>Preparing...</span>
-                        </div>
-                    </div>,
-                    document.body
-                )}
-            {minting &&
-                createPortal(
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-                        {mintFinishedRef.current ? (
-                            <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
-                                {mintSuccess && (
-                                    <div
-                                        onClick={() => {
-                                            loadStonesData();
-                                            setIsMinting(false);
-                                        }}
-                                        className="flex flex-col items-center"
-                                    >
-                                        <span className="text-green-400 font-bold">🥳 Minted successfully!</span>
-                                        <span>Check 👉</span>
-                                    </div>
-                                )}
-                                {mintError && <div className="text-red-400 font-bold">😖 Mint failed!</div>}
-                            </div>
-                        ) : (
-                            <div className="flex flex-col items-center text-white text-lg p-4 rounded-md bg-black/80">
-                                <svg
-                                    className="animate-spin h-10 w-10 mb-4 text-white"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        className="opacity-75"
-                                        fill="currentColor"
-                                        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                                    />
-                                </svg>
-                                <span>Minting...</span>
-                            </div>
-                        )}
-                    </div>,
-                    document.body
-                )}
         </div>
     );
 }

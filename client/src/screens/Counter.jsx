@@ -1,5 +1,5 @@
 import secretariatImg from "@images/secretariat.png";
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import api from "../api";
 
 export default function Counter() {
@@ -31,7 +31,7 @@ export default function Counter() {
                 style={{ aspectRatio: "0.55 / 1" }}
             >
                 <div
-                    className="absolute overflow-y-auto z-10 text-lime-500 text-xs"
+                    className="absolute overflow-y-auto z-10 text-primary text-xs"
                     style={{
                         top: "14%",
                         width: "80%",
@@ -45,13 +45,13 @@ export default function Counter() {
                         <div className="flex flex-col gap-1">
                             <div className="flex justify-between items-center text-md">
                                 <span className="uppercase">total:</span>
-                                <span className="p-1 border border-lime-500 rounded">000.000</span>
+                                <span className="p-1 border border-primary rounded">000.000</span>
                             </div>
                             <h2 className="text-lg leading-tight font-bold uppercase text-center">--- by biome ---</h2>
                             {Object.entries(counter.ByBiome).map(([biome, number]) => (
                                 <div className="flex justify-between items-center text-md">
                                     <span className="uppercase">{biome}:</span>
-                                    <span className="p-1 border border-lime-500 rounded">
+                                    <span className="p-1 border border-primary rounded">
                                         {String(number).padStart(6, "0")}
                                     </span>
                                 </div>
@@ -60,7 +60,7 @@ export default function Counter() {
                             {Object.entries(counter.ByRarity).map(([rarity, number]) => (
                                 <div className="flex justify-between items-center text-md">
                                     <span className="uppercase">{rarity}:</span>
-                                    <span className="p-1 border border-lime-500 rounded">
+                                    <span className="p-1 border border-primary rounded">
                                         {String(number).padStart(6, "0")}
                                     </span>
                                 </div>
@@ -69,7 +69,7 @@ export default function Counter() {
                             {Object.entries(counter.ByStone).map(([stone, number]) => (
                                 <div className="flex justify-between items-center text-md">
                                     <span className="uppercase">{stone}:</span>
-                                    <span className="p-1 border border-lime-500 rounded">
+                                    <span className="p-1 border border-primary rounded">
                                         {String(number).padStart(6, "0")}
                                     </span>
                                 </div>

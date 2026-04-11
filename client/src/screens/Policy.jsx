@@ -11,7 +11,7 @@ export default function Policy() {
                 style={{ aspectRatio: "0.55 / 1" }}
             >
                 <div
-                    className="absolute overflow-y-auto z-10 text-lime-500 text-xs"
+                    className="absolute overflow-y-auto z-10 text-primary text-xs"
                     style={{
                         top: "14%",
                         width: "80%",
@@ -23,13 +23,13 @@ export default function Policy() {
                             <h1 className="text-xl font-bold uppercase text-center">policy</h1>
                             <div className="flex justify-evenly">
                                 <button
-                                    className="uppercase font-bold w-20 p-1 border border-lime-500 rounded"
+                                    className="uppercase font-bold w-20 p-1 border border-primary rounded"
                                     onClick={() => setTab("privacy")}
                                 >
                                     privacy
                                 </button>
                                 <button
-                                    className="uppercase font-bold w-20 p-1 border border-lime-500 rounded"
+                                    className="uppercase font-bold w-20 p-1 border border-primary rounded"
                                     onClick={() => setTab("terms")}
                                 >
                                     terms
@@ -54,7 +54,7 @@ export default function Policy() {
                         <div className="relative">
                             <h1 className="text-xl font-bold uppercase text-center">policy</h1>
                             <button
-                                className="absolute top-0 right-0 uppercase font-bold w-20 p-1 border border-lime-500 rounded"
+                                className="absolute top-0 right-0 uppercase font-bold w-20 p-1 border border-primary rounded"
                                 onClick={() => setTab(null)}
                             >
                                 back
@@ -220,7 +220,7 @@ export default function Policy() {
                         <div className="relative">
                             <h1 className="text-xl font-bold uppercase text-center">terms</h1>
                             <button
-                                className="absolute top-0 right-0 uppercase font-bold w-20 p-1 border border-lime-500 rounded"
+                                className="absolute top-0 right-0 uppercase font-bold w-20 p-1 border border-primary rounded"
                                 onClick={() => setTab(null)}
                             >
                                 back

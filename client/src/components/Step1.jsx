@@ -180,7 +180,7 @@ export default function Step1({ next, setSpecimen, stone, setStone, biome, setBi
                         className="absolute inset-0 pointer-events-none animate-scan"
                         style={{
                             background:
-                                "linear-gradient(180deg, rgba(0,255,0,0) 0%, rgba(0,255,0,0.8) 50%, rgba(0,255,0,0) 100%)",
+                                "linear-gradient(180deg, rgba(63,229,153,0) 0%, rgba(63,229,153,0.8) 50%, rgba(63,229,153,0) 100%)",
                             backgroundRepeat: "no-repeat",
                             backgroundSize: "100% 8%",
                             mixBlendMode: "screen",
@@ -200,7 +200,7 @@ export default function Step1({ next, setSpecimen, stone, setStone, biome, setBi
                     {preview ? (
                         <img src={preview} alt="uploaded specimen" className="rounded max-h-full" />
                     ) : (
-                        <div className="flex flex-col gap-2 justify-center text-lime-500">
+                        <div className="flex flex-col gap-2 justify-center text-primary">
                             <strong className="text-sm uppercase font-semibold">[tap to capture]</strong>
 
                             <span className="text-xs">JPG, PNG. 10MB MAX</span>
@@ -430,8 +430,8 @@ ${biome === "coralux" ? "text-cyan-200" : ""}`}
                                 />
                             </svg>
                         ) : (
-                            <div className="bg-gray-900 border border-lime-500 rounded-lg p-6 max-w-md w-full flex flex-col gap-5">
-                                <h3 className="text-lime-500 text-lg font-bold text-center">SELECT STONE</h3>
+                            <div className="bg-gray-900 border border-primary rounded-lg p-6 max-w-md w-full flex flex-col gap-5">
+                                <h3 className="text-primary text-lg font-bold text-center">SELECT STONE</h3>
 
                                 <div className="grid grid-cols-4 gap-3">
                                     {Object.entries(availableStones || []).map(([Type, SparkCount]) => {
@@ -448,7 +448,7 @@ ${biome === "coralux" ? "text-cyan-200" : ""}`}
                                                 className={`flex flex-col items-center rounded-lg transition-colors ${
                                                     isDisabled
                                                         ? "opacity-50 cursor-not-allowed grayscale"
-                                                        : "hover:border-lime-500"
+                                                        : "hover:border-primary"
                                                 }`}
                                             >
                                                 <div
@@ -475,7 +475,7 @@ ${biome === "coralux" ? "text-cyan-200" : ""}`}
                                     })}
                                 </div>
 
-                                <hr className="w-full border-none h-0.5 bg-lime-500" />
+                                <hr className="w-full border-none h-0.5 bg-primary" />
 
                                 <div className="grid grid-cols-4 gap-3">
                                     {purchases?.map(({ Id, Product }) => {
@@ -487,7 +487,7 @@ ${biome === "coralux" ? "text-cyan-200" : ""}`}
                                                 className={`flex flex-col items-center rounded-lg transition-colors ${
                                                     isOpening
                                                         ? "opacity-50 cursor-not-allowed grayscale"
-                                                        : "hover:border-lime-500"
+                                                        : "hover:border-primary"
                                                 }`}
                                             >
                                                 <div
@@ -506,7 +506,7 @@ ${biome === "coralux" ? "text-cyan-200" : ""}`}
 
                                 <div className="flex gap-6">
                                     <Link
-                                        className="w-1/2 text-center uppercase py-2 border border-lime-500 text-lime-500 rounded-lg hover:bg-lime-500/10 transition-colors"
+                                        className="w-1/2 text-center uppercase py-2 border border-primary text-primary rounded-lg hover:bg-primary/10 transition-colors"
                                         to="/storage"
                                     >
                                         storage
@@ -514,7 +514,7 @@ ${biome === "coralux" ? "text-cyan-200" : ""}`}
 
                                     <button
                                         onClick={() => setShowStoneDialog(false)}
-                                        className="w-1/2 text-center uppercase py-2 border border-lime-500 text-lime-500 rounded-lg hover:bg-lime-500/10 transition-colors"
+                                        className="w-1/2 text-center uppercase py-2 border border-primary text-primary rounded-lg hover:bg-primary/10 transition-colors"
                                     >
                                         close
                                     </button>

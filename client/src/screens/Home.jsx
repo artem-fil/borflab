@@ -1,14 +1,14 @@
 import { Link } from "react-router-dom";
 
-import secretariatImg from "@images/secretariat.png";
-import labImg from "@images/lab.png";
-import swapImg from "@images/swap.png";
-import shopImg from "@images/shop.png";
-import libraryImg from "@images/library.png";
-import profileImg from "@images/profile.png";
-import storageImg from "@images/storage.png";
 import counterImg from "@images/counter.png";
+import labImg from "@images/lab.png";
+import libraryImg from "@images/library.png";
 import policyImg from "@images/policy.png";
+import profileImg from "@images/profile.png";
+import secretariatImg from "@images/secretariat.png";
+import shopImg from "@images/shop.png";
+import storageImg from "@images/storage.png";
+import swapImg from "@images/swap.png";
 
 export default function Home() {
     const menuItems = {
@@ -41,10 +41,10 @@ export default function Home() {
                             <Link
                                 key={item}
                                 to={`/${item}`}
-                                className="border border-lime-500 rounded-xl p-1 flex items-center flex-col justify-between"
+                                className="border border-primary rounded-xl p-1 flex items-center flex-col justify-between"
                             >
                                 <img className="h-10" src={icon} alt={item} />
-                                <span className="text-lg text-lime-500">{item}</span>
+                                <span className="text-lg text-primary">{item}</span>
                             </Link>
                         );
                     })}

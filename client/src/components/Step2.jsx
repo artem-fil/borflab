@@ -5,6 +5,7 @@ import transmutatorImg from "@images/transmutator.png";
 import watermarkImg from "@images/watermark.png";
 import { useWallets } from "@privy-io/react-auth/solana";
 import labSound from "@sounds/lab.ogg";
+import mintSound from "@sounds/mint.ogg";
 import printerSound from "@sounds/printer.ogg";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -63,6 +64,7 @@ export default function Step2({ current, specimen, stone, biome }) {
     const monitorRef = useRef(null);
     const sseRef = useRef(null);
     const queueRef = useRef(Promise.resolve());
+    const audioMint = useRef(new Audio(mintSound));
     const audioLab = useRef(new Audio(labSound));
     const audioPrinter = useRef(new Audio(printerSound));
     const hasStarted = useRef(false);
@@ -148,8 +150,10 @@ export default function Step2({ current, specimen, stone, biome }) {
     function stopAllAudio() {
         audioLab.current.pause();
         audioPrinter.current.pause();
+        audioMint.current.pause();
         audioLab.current.currentTime = 0;
         audioPrinter.current.currentTime = 0;
+        audioMint.current.currentTime = 0;
     }
 
     function stopAllTimers() {
@@ -280,6 +284,13 @@ export default function Step2({ current, specimen, stone, biome }) {
 
     async function triggerAutoMint(expId) {
         setPhase("MINTING");
+
+        audioPrinter.current.pause();
+        audioPrinter.current.currentTime = 0;
+        audioMint.current.loop = true;
+        audioMint.current.volume = 0.3;
+        audioMint.current.play();
+
         handleMintAction(expId);
     }
 
@@ -326,13 +337,13 @@ export default function Step2({ current, specimen, stone, biome }) {
     }
 
     function showFrontCard() {
-        audioPrinter.current.pause();
+        stopAllAudio();
 
         const BACK_OUT_DURATION = 1000;
 
         if (backCardRef.current) {
             backCardRef.current.style.transitionDuration = `${BACK_OUT_DURATION}ms`;
-            //backCardRef.current.style.transform = "translateY(100%)";
+            backCardRef.current.style.transform = "translateY(100%)";
         }
 
         if (frontCardRef.current) {
@@ -373,10 +384,20 @@ export default function Step2({ current, specimen, stone, biome }) {
             <div className="relative w-full">
                 {/* monitor */}
                 <div
-                    className="absolute text-xs text-lime-500 font-[monospace,emoji] leading-tight"
+                    className="absolute text-xs text-primary font-[monospace,emoji] leading-tight"
                     style={{ top: "56%", left: "12%", width: "67%", aspectRatio: "1 / 0.6" }}
                 >
-                    <div className="absolute inset-0 pointer-events-none bg-no-repeat bg-[linear-gradient(180deg,rgba(0,255,0,0)_0%,rgba(0,255,0,0.8)_50%,rgba(0,255,0,0)_100%)] bg-[length:100%_6%] animate-[scan_2.5s_linear_infinite] opacity-70 mix-blend-screen" />
+                    <div
+                        className="absolute inset-0 pointer-events-none animate-scan"
+                        style={{
+                            background:
+                                "linear-gradient(180deg, rgba(63,229,153,0) 0%, rgba(63,229,153,0.8) 50%, rgba(63,229,153,0) 100%)",
+                            backgroundRepeat: "no-repeat",
+                            backgroundSize: "100% 8%",
+                            mixBlendMode: "screen",
+                            opacity: 0.7,
+                        }}
+                    />
                     <div ref={monitorRef} className="overflow-auto h-full">
                         <p>BORFLAB 37.987-B</p>
                         <p>Progress... {progress}%</p>
@@ -385,10 +406,10 @@ export default function Step2({ current, specimen, stone, biome }) {
                         {minting && <div className="text-orange-400 animate-pulse mt-1">Securing on chain...</div>}
                         {mintError && <div className="text-red-500 font-bold mt-1">[!] CRITICAL_MINT_FAILURE</div>}
                         {mintSuccess && (
-                            <div className="p-1 border border-lime-500/50 bg-lime-900/20 pointer-events-auto">
+                            <div className="p-1 border border-primary/50 bg-lime-900/20 pointer-events-auto">
                                 <Link
                                     to="/library"
-                                    className="text-lime-500 underline decoration-dotted hover:text-white transition-colors block"
+                                    className="text-primary underline decoration-dotted hover:text-white transition-colors block"
                                 >
                                     &gt; ACCESS_LIBRARY.exe
                                 </Link>
@@ -418,7 +439,7 @@ export default function Step2({ current, specimen, stone, biome }) {
                     <div
                         ref={backCardRef}
                         className={`box-border w-full absolute ${text} p-1 transition-all ease-out`}
-                        style={{ transform: "translateY(0)", aspectRatio: "0.62 / 1" }}
+                        style={{ transform: "translateY(100%)", aspectRatio: "0.62 / 1" }}
                     >
                         <img className="absolute inset-0 w-full h-full" src={cardbackImg} alt="card back" />
                         <div className="relative p-0.5 pb-5 w-full h-full">
@@ -437,11 +458,13 @@ export default function Step2({ current, specimen, stone, biome }) {
                                 <hr className={`border-0 h-px ${bg}`} />
                                 <div className=" flex w-full items-center">
                                     <div className=" flex items-center p-1 h-18 w-1/3">
-                                        <img
-                                            src={previewUrl}
-                                            className="ml-auto mr-auto rounded object-cover"
-                                            alt="input image"
-                                        />
+                                        {previewUrl && (
+                                            <img
+                                                src={previewUrl}
+                                                className="ml-auto mr-auto rounded object-cover"
+                                                alt="input image"
+                                            />
+                                        )}
                                     </div>
                                     <div className={`border-0 w-px h-full ${bg}`} />
                                     <div

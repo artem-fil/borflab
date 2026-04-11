@@ -1,5 +1,3 @@
-import { PublicKey, clusterApiUrl } from "@solana/web3.js";
-
 import agate from "@images/agate.png";
 import amazonite from "@images/amazonite.png";
 import canopicaImg from "@images/canopica.png";
@@ -12,12 +10,6 @@ import quartz from "@images/quartz.png";
 import ruby from "@images/ruby.png";
 import sapphire from "@images/sapphire.png";
 import topaz from "@images/topaz.png";
-
-const CLUSTER = "devnet";
-
-export const ENDPOINT = clusterApiUrl(CLUSTER);
-export const PROGRAM_ID = new PublicKey("2Wr2VbaMpGA5cLJrdpcHQpRmXtbdyypMoa9VzMuAhV3A");
-export const TOKEN_METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
 export const STONES = {
     Agate: {

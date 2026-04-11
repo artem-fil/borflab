@@ -15,6 +15,7 @@ export default {
                     dark: "#5D643A",
                     light: "#95A05D",
                 },
+                primary: "#3FE599",
                 accent: "#ED9B00",
             },
             backgroundImage: {

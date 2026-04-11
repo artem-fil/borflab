@@ -1,13 +1,12 @@
 import { Link } from "react-router-dom";
 
-import swapomatImg from "@images/swapomat.png";
 import cardfrontImg from "@images/card-front.png";
-import Card from "@components/Card";
-import api from "../api";
-import { useState, useRef, useEffect } from "react";
-import { createPortal } from "react-dom";
-import { RARITIES } from "../config.js";
+import swapomatImg from "@images/swapomat.png";
 import { useWallets } from "@privy-io/react-auth/solana";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import api from "../api";
+import { RARITIES } from "../config.js";
 
 const totalSlots = 9;
 

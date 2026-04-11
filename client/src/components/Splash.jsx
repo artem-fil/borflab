@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import secretariatImg from "@images/secretariat.png";
 import logoImg from "@images/logo.png";
+import secretariatImg from "@images/secretariat.png";
 
 export default function Splash() {
     const [displayed, setDisplayed] = useState("");
@@ -51,7 +51,7 @@ export default function Splash() {
                     className="z-10 max-h-full w-full flex flex-col gap-4 items-center justify-center"
                 >
                     <img src={logoImg} alt="logo" />
-                    <div ref={monitorRef} className="text-lime-500 w-full overflow-auto h-full">
+                    <div ref={monitorRef} className="text-primary w-full overflow-auto h-full">
                         <span className="uppercase whitespace-pre-wrap">{displayed}</span>
                         <span className="animate-pulse">▋</span>
                     </div>
