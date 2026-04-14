@@ -374,6 +374,7 @@ export default function Step2({ current, specimen, stone, biome }) {
     }
 
     const { bg, text, border, icon } = BIOMES[biome] || {};
+    const borfId = localStorage.getItem("borfId");
 
     return (
         <div className="flex flex-col h-full justify-end px-4">
@@ -480,7 +481,7 @@ export default function Step2({ current, specimen, stone, biome }) {
                                 <hr className={`border-0 h-px ${bg}`} />
                                 <p className=" leading-none p-px ">
                                     <strong className={`uppercase  ${text}`}>BORFOLOGIST ID: </strong>
-                                    PSM-001
+                                    {borfId}
                                 </p>
                                 <strong className={`p-0.5 ${bg} text-orange-50 uppercase`}>borf profile</strong>
                                 <div className="p-0.5">

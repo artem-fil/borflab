@@ -67,6 +67,7 @@ type RarityStats struct {
 
 type User struct {
 	PrivyId string
+	BorfId  string
 	Email   string
 	Wallets []string
 	Created time.Time

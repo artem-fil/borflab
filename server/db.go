@@ -37,46 +37,67 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) UpsertUser(ctx context.Context, u *User) (*User, bool, error) {
-	row := db.Conn.QueryRowContext(
-		ctx,
-		`
-insert into users (privy_id, email, wallets, created, synced)
-values ($1, $2, $3, now(), now())
+    
+    row := db.Conn.QueryRowContext(
+    ctx,
+    `
+WITH new_user_data AS (
+    SELECT 
+        $1::text as p_id,
+        $2::text as p_email,
+        upper(substring(split_part($2::text, '@', 1) from 1 for 3)) as p_prefix
+),
+next_val AS (
+    SELECT count(*) + 1 as val 
+    FROM users, new_user_data 
+    WHERE borf_id LIKE new_user_data.p_prefix || '-%'
+)
+insert into users (privy_id, email, wallets, borf_id, created, synced)
+select 
+    d.p_id, 
+    d.p_email, 
+    $3, 
+    d.p_prefix || '-' || to_char(n.val, 'FM000') || '-' || to_char(now(), 'YY') || '/I',
+    now(), 
+    now()
+from new_user_data d, next_val n
 on conflict (privy_id)
 do update set
-	email = excluded.email,
-	wallets = excluded.wallets,
-	synced = now()
+    email = excluded.email,
+    wallets = excluded.wallets,
+    synced = now()
 returning
-	privy_id,
-	email,
-	wallets,
-	created,
-	synced,
-	(xmax = 0) as is_new
-	`,
-		u.PrivyId,
-		nullable(u.Email),
-		pq.Array(u.Wallets),
-	)
+    privy_id,
+    email,
+    wallets,
+    borf_id,
+    created,
+    synced,
+    (xmax = 0) as is_new
+    `,
+    u.PrivyId,
+    nullable(u.Email),
+    pq.Array(u.Wallets),
+)
 
-	var updated User
-	var isNew bool
-	var wallets pq.StringArray
+    var updated User
+    var isNew bool
+    var wallets pq.StringArray
 
-	if err := row.Scan(
-		&updated.PrivyId,
-		&updated.Email,
-		&wallets,
-		&updated.Created,
-		&updated.Synced,
-		&isNew,
-	); err != nil {
-		return nil, false, err
-	}
+    if err := row.Scan(
+        &updated.PrivyId,
+        &updated.Email,
+        &wallets,
+        &updated.BorfId, 
+        &updated.Created,
+        &updated.Synced,
+        &isNew,
+    ); err != nil {
+        return nil, false, err
+    }
 
-	updated.Wallets = []string(wallets)
-	return &updated, isNew, nil
+    updated.Wallets = []string(wallets)
+    return &updated, isNew, nil
 }
 
 func (db *DB) GetLastSignature(ctx context.Context) (string, error) {

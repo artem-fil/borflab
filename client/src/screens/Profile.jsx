@@ -1,37 +1,69 @@
 import { usePrivy } from "@privy-io/react-auth";
 
+import secretariatImg from "@images/secretariat.png";
+
 export default function Profile() {
     const { user, logout } = usePrivy();
-
-    const email = user?.email?.address || "—";
+    const borfId = localStorage.getItem("borfId");
 
     return (
-        <div className="flex-grow flex flex-col items-center p-3 text-xs">
-            <div className="w-full max-w-xl rounded-2xl bg-black/60 text-white p-5 shadow-xl backdrop-blur-md border border-white/10">
-                <div className="flex items-start justify-between gap-3">
-                    <div>
-                        <h3 className="text-lg font-semibold">Profile</h3>
-                    </div>
+        <div className="flex-grow flex flex-col items-center justify-center overflow-hidden p-4 text-primary">
+            <div
+                className="relative flex items-center justify-center max-h-full w-full"
+                style={{ aspectRatio: "0.55 / 1" }}
+            >
+                <div
+                    style={{
+                        top: "15%",
+                        width: "80%",
+                        height: "64%",
+                    }}
+                    className="absolute flex flex-col items-start gap-2 z-10 max-h-full "
+                >
+                    <h1 className="text-xl uppercase self-center font-bold text-center drop-shadow-[0_0_2px_rgba(63,229,153,0.6)]">
+                        borfologist profile
+                    </h1>
+                    <h2 className="text-black uppercase font-medium  bg-primary [box-shadow:inset_-2px_-2px_0_rgba(0,0,0,0.4)]">
+                        borfologist_id(immutable):
+                    </h2>
+                    <span className="uppercase font-medium drop-shadow-[0_0_2px_rgba(63,229,153,0.6)]">{borfId}</span>
+                    <h2 className="text-black uppercase font-medium  bg-primary [box-shadow:inset_-2px_-2px_0_rgba(0,0,0,0.4)]">
+                        sec_assignment:
+                    </h2>
+                    <span className="uppercase font-medium drop-shadow-[0_0_2px_rgba(63,229,153,0.6)]">
+                        006 // transmutation_lab
+                    </span>
+                    <h2 className="text-black uppercase font-medium bg-primary [box-shadow:inset_-2px_-2px_0_rgba(0,0,0,0.4)]">
+                        privy_id:
+                    </h2>
+                    <span className="uppercase font-medium drop-shadow-[0_0_2px_rgba(63,229,153,0.6)]">
+                        {user.id.slice(10, 16)}
+                        {"*".repeat(user.id.length - 16)}
+                    </span>
+                    <h2 className="text-black uppercase font-medium bg-primary [box-shadow:inset_-2px_-2px_0_rgba(0,0,0,0.4)]">
+                        subject_throughput:
+                    </h2>
+                    <span className="uppercase font-medium drop-shadow-[0_0_2px_rgba(63,229,153,0.6)]">004_units</span>
+                    <h1 className="text-xl uppercase self-center font-bold text-center drop-shadow-[0_0_2px_rgba(63,229,153,0.6)]">
+                        status: ready
+                    </h1>
                     <button
+                        className="self-center uppercase text-black bg-primary [box-shadow:inset_-2px_-2px_0_rgba(0,0,0,0.4)] px-4 py-2"
                         onClick={() => {
                             localStorage.removeItem("primaryWallet");
+                            localStorage.removeItem("borfId");
                             logout();
                         }}
-                        className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/20"
                     >
-                        Log out
+                        log out
                     </button>
                 </div>
-                <div className="mt-2 grid grid-cols-1 gap-3">
-                    <div className="flex gap-2 items-center justify-between">
-                        <div className="w-12 text-white/70">Id</div>
-                        <div className="flex-1 truncate">{user.id.slice(-6)}</div>
-                    </div>
-                    <div className="flex gap-2 items-center justify-between">
-                        <div className="w-12 text-white/70">E-mail</div>
-                        <div className="flex-1 truncate">{email}</div>
-                    </div>
-                </div>
+
+                <img
+                    className="absolute inset-0 w-full max-h-auto object-contain"
+                    src={secretariatImg}
+                    alt="secretariat"
+                />
             </div>
         </div>
     );

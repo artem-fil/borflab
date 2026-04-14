@@ -1,20 +1,20 @@
-import { Routes, Route, useLocation, Link } from "react-router-dom";
-import { usePrivy, useIdentityToken, useLogin } from "@privy-io/react-auth";
+import { useIdentityToken, useLogin, usePrivy } from "@privy-io/react-auth";
+import { Route, Routes, useLocation } from "react-router-dom";
 
-import Signup from "./screens/Signup";
-import Home from "./screens/Home";
-import Welcome from "./screens/Welcome";
-import Profile from "./screens/Profile";
-import Library from "./screens/Library";
-import Shop from "./screens/Shop";
-import Storage from "./screens/Storage";
-import Lab from "./screens/Lab";
-import Swapomat from "./screens/Swapomat";
-import Policy from "./screens/Policy";
-import Counter from "./screens/Counter";
-import Splash from "@components/Splash";
 import NavMenu from "@components/NavMenu";
-import { useState, useEffect } from "react";
+import Splash from "@components/Splash";
+import { useEffect, useState } from "react";
+import Counter from "./screens/Counter";
+import Home from "./screens/Home";
+import Lab from "./screens/Lab";
+import Library from "./screens/Library";
+import Policy from "./screens/Policy";
+import Profile from "./screens/Profile";
+import Shop from "./screens/Shop";
+import Signup from "./screens/Signup";
+import Storage from "./screens/Storage";
+import Swapomat from "./screens/Swapomat";
+import Welcome from "./screens/Welcome";
 
 import api from "./api";
 import store from "./store";
@@ -26,6 +26,7 @@ export default function App() {
     const [syncing, setSyncing] = useState(false);
     const [minTimeElapsed, setMinTimeElapsed] = useState(false);
     const [isExiting, setIsExiting] = useState(false);
+    const [borfId, setBorfId] = useState(null);
     const [showSplash, setShowSplash] = useState(true);
 
     useEffect(() => {
@@ -65,10 +66,13 @@ export default function App() {
     const { login } = useLogin({
         onComplete: (user, isNewUser) => {
             const performSync = async () => {
-                if (isNewUser || !user.wasAlreadyAuthenticated) {
+                let cachedId = localStorage.getItem("borfId");
+
+                if (isNewUser || !cachedId) {
                     try {
                         setSyncing(true);
-                        await api.syncUser(user);
+                        const syncedUser = await api.syncUser(user);
+                        setBorfId(syncedUser.BorfId);
                     } catch (err) {
                         console.error("Sync error:", err);
                         await logout();
@@ -76,7 +80,7 @@ export default function App() {
                         setSyncing(false);
                     }
                 } else {
-                    console.log("User already exists, skipping sync");
+                    console.log("User identification verified from cache");
                 }
             };
 
@@ -112,6 +116,7 @@ export default function App() {
         );
     }
 
+    store.setBorfId(borfId);
     store.setToken(identityToken);
 
     return (

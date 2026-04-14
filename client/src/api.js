@@ -47,6 +47,7 @@ async function request(endpoint, options = {}) {
         if (!res.ok) {
             if (res.status === 401) {
                 store.clear();
+                store.clearBorfId();
                 window.location.href = "/signup";
             }
 

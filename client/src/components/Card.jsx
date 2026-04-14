@@ -12,7 +12,6 @@ export default function Card({ monster }) {
         Name,
         Height,
         Weight,
-        UserId,
         Habitat,
         Species,
         Biome,
@@ -26,6 +25,7 @@ export default function Card({ monster }) {
     } = monster;
 
     const { border, bg, text, icon } = BIOMES[Biome];
+    const borfId = localStorage.getItem("borfId");
 
     return (
         <div
@@ -92,7 +92,7 @@ export default function Card({ monster }) {
                             <hr className={`border-0 h-0.5 ${bg}`} />
                             <p className=" leading-none p-1 text-lg">
                                 <strong className={`uppercase  ${text}`}>BORFOLOGIST ID: </strong>
-                                {`# ${UserId.slice(-6)}/I`}
+                                {`# ${borfId}`}
                             </p>
                             <strong className={`p-2 ${bg} text-orange-50 uppercase text-xl`}>borf profile</strong>
                             <div className="p-1">
@@ -175,7 +175,7 @@ export default function Card({ monster }) {
                                         <span
                                             className={`leading-none grow border-b ${border} font-special text-black`}
                                         >
-                                            {`H: ${Height}cm / W: ${Weight}kg`}
+                                            {`H: ${Height} cm / W: ${Weight / 1000} kg`}
                                         </span>
                                     </p>
                                 </div>
