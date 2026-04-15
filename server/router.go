@@ -31,6 +31,7 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 
 	router.Handle("GET", "/api/stones", mddlwr.RequireAuth(api.GetStones))
 	router.Handle("GET", "/api/monsters", mddlwr.RequireAuth(api.GetMonsters))
+	router.Handle("GET", "/api/swapomat", mddlwr.RequireAuth(api.GetSwapomat))
 	router.Handle("GET", "/api/monsters/:id", mddlwr.RequireAuth(api.GetMonster))
 	router.Handle("GET", "/api/counter", mddlwr.RequireAuth(api.GetCounter))
 	router.Handle("GET", "/api/products", mddlwr.RequireAuth(api.GetProducts))

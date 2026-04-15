@@ -19,7 +19,7 @@ export default function Profile() {
                         width: "80%",
                         height: "64%",
                     }}
-                    className="absolute flex flex-col items-start gap-2 z-10 max-h-full "
+                    className="absolute flex flex-col items-start gap-1 z-10 max-h-full overflow-hidden"
                 >
                     <h1 className="text-xl uppercase self-center font-bold text-center drop-shadow-[0_0_2px_rgba(63,229,153,0.6)]">
                         borfologist profile
@@ -28,6 +28,12 @@ export default function Profile() {
                         borfologist_id(immutable):
                     </h2>
                     <span className="uppercase font-medium drop-shadow-[0_0_2px_rgba(63,229,153,0.6)]">{borfId}</span>
+                    <h2 className="text-black  uppercase font-medium  bg-primary [box-shadow:inset_-2px_-2px_0_rgba(0,0,0,0.4)]">
+                        email:
+                    </h2>
+                    <span className="uppercase w-full truncate font-medium drop-shadow-[0_0_2px_rgba(63,229,153,0.6)]">
+                        {user.email?.address}
+                    </span>
                     <h2 className="text-black uppercase font-medium  bg-primary [box-shadow:inset_-2px_-2px_0_rgba(0,0,0,0.4)]">
                         sec_assignment:
                     </h2>

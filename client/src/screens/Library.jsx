@@ -1,5 +1,4 @@
 import Button from "@components/Button";
-import { useNavigate } from "react-router-dom";
 import Card from "@components/Card";
 import borderBottomImg from "@images/border-bottom.png";
 import borderTopImg from "@images/border-top.png";
@@ -7,6 +6,7 @@ import buttonChevronActiveImg from "@images/button-chevron-active.png";
 import buttonChevronDisabledImg from "@images/button-chevron-disabled.png";
 import slotImg from "@images/slot.png";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import api from "../api";
 
@@ -141,6 +141,7 @@ export default function Library() {
                     <div className="grid grid-cols-3 gap-x-3 gap-y-2 w-full h-full">
                         {monsters.map((monster) => {
                             const { bg, accent } = BIOMES[monster.Biome];
+
                             return (
                                 <div
                                     key={monster.SerialNumber}
@@ -183,7 +184,7 @@ export default function Library() {
 
             {monsterDialog ? (
                 <div className="w-full px-4 flex gap-2 items-center justify-center py-4 text-lg">
-                    <Button onClick={() => navigate("/swapomat")} label={"swap"} />
+                    <Button onClick={() => navigate(`/swapomat/${monsterDialog.MintAddress}`)} label={"swap"} />
                     <Button disabled label={"play"} />
                 </div>
             ) : (

@@ -102,6 +102,17 @@ export default {
         });
     },
 
+    async getSwapomat({ page, limit, sort, order } = {}) {
+        return request("/api/swapomat", {
+            params: {
+                page: page ?? 1,
+                limit: limit ?? 10,
+                sort: sort ?? "created",
+                order: order ?? "desc",
+            },
+        });
+    },
+
     async getMonster(id) {
         return request(`/api/monsters/${id}`);
     },

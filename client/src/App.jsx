@@ -132,7 +132,7 @@ export default function App() {
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/storage" element={<Storage />} />
                 <Route path="/shop" element={<Shop />} />
-                <Route path="/swapomat" element={<Swapomat />} />
+                <Route path="/swapomat/:monsterId?" element={<Swapomat />} />
                 <Route path="/counter" element={<Counter />} />
                 <Route path="/policy" element={<Policy />} />
                 <Route path="*" element={<Welcome />} />

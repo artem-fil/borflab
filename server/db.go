@@ -48,16 +48,14 @@ WITH new_user_data AS (
         upper(substring(split_part($2::text, '@', 1) from 1 for 3)) as p_prefix
 ),
 next_val AS (
-    SELECT count(*) + 1 as val 
-    FROM users, new_user_data 
-    WHERE borf_id LIKE new_user_data.p_prefix || '-%'
+    SELECT count(*) + 1 as val FROM users
 )
 insert into users (privy_id, email, wallets, borf_id, created, synced)
 select 
     d.p_id, 
     d.p_email, 
     $3, 
-    d.p_prefix || '-' || to_char(n.val, 'FM000') || '-' || to_char(now(), 'YY') || '/I',
+    d.p_prefix || '-' || to_char(n.val, 'FM00000') || '-' || to_char(now(), 'YY') || '/I',
     now(), 
     now()
 from new_user_data d, next_val n
@@ -399,7 +397,7 @@ from monsters where user_id = $1 order by %s limit $2 offset $3;`, sortOrder),
 
 	for rows.Next() {
 		var monster Monster
-		err := rows.Scan(
+		err = rows.Scan(
 			&monster.Id,
 			&monster.UserId,
 			&monster.ExperimentId,
@@ -1013,6 +1011,96 @@ on conflict (signature) do nothing
 	}
 	return err
 }
+
+func (db *DB) SelectSwapPool(ctx context.Context, limit int) ([]Monster, error) {
+	monsters := make([]Monster, 0)
+
+	rows, err := db.Conn.QueryContext(
+		ctx,
+		`
+SELECT
+	id,
+	COALESCE(user_id, 'SWAP_POOL'),
+	experiment_id,
+	mint_address,
+	owner_address,
+	stone_mint_address,
+	card_state_address,
+	name,
+	height,
+	weight,
+	species,
+	lore,
+	movement_class,
+	behaviour,
+	personality,
+	abilities,
+	habitat,
+	biome,
+	rarity,
+	stone,
+	metadata_uri,
+	image_cid,
+	serial_number,
+	generation,
+	status,
+	signature,
+	slot,
+	minted,
+	created
+FROM monsters
+WHERE status = 'in_pool'
+  AND user_id IS NULL
+ORDER BY RANDOM()
+LIMIT $1;`,
+		limit,
+	)
+	if err != nil {
+		return monsters, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var monster Monster
+		err = rows.Scan(
+			&monster.Id,
+			&monster.UserId,
+			&monster.ExperimentId,
+			&monster.MintAddress,
+			&monster.OwnerAddress,
+			&monster.StoneMintAddress,
+			&monster.CardStateAddress,
+			&monster.Name,
+			&monster.Height,
+			&monster.Weight,
+			&monster.Species,
+			&monster.Lore,
+			&monster.MovementClass,
+			&monster.Behaviour,
+			&monster.Personality,
+			&monster.Abilities,
+			&monster.Habitat,
+			&monster.Biome,
+			&monster.Rarity,
+			&monster.Stone,
+			&monster.MetadataUri,
+			&monster.ImageCid,
+			&monster.SerialNumber,
+			&monster.Generation,
+			&monster.Status,
+			&monster.Signature,
+			&monster.Slot,
+			&monster.Minted,
+			&monster.Created,
+		)
+		if err != nil {
+			return monsters, err
+		}
+		monsters = append(monsters, monster)
+	}
+	return monsters, rows.Err()
+}
+
 func (db *DB) SwapMonsterTx(
 	ctx context.Context,
 	tx *sql.Tx,

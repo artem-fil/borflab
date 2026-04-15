@@ -298,7 +298,7 @@ export default function Step1({ next, setSpecimen, stone, setStone, biome, setBi
                     aria-disabled={!isNextEnabled}
                     className={`rounded-full aspect-square absolute
 
-${isNextEnabled ? "" : " cursor-not-allowed"}`}
+${isNextEnabled ? "" : " cursor-not-allowed backdrop-grayscale"}`}
                     style={{ top: "46%", left: "78%", width: "14%" }}
                 />
                 {/* indicators */}
@@ -330,14 +330,6 @@ ${isNextEnabled ? "" : " cursor-not-allowed"}`}
         animate-pulse
         shadow-[0_0_15px_rgba(255,0,0,0.6)]
         ${biome ? "bg-[radial-gradient(circle_at_30%_40%,#00ff00_20%,#008b00_90%)]" : "bg-[radial-gradient(circle_at_30%_40%,#ff0000_20%,#8b0000_90%)]"}
-    `}
-                />
-                <div
-                    style={{ top: "46%", left: "78%", width: "14%" }}
-                    className={`
-                    aspect-square
-        absolute z-10 rounded-full pointer-events-none 
-        ${isNextEnabled ? "" : "backdrop-grayscale"}
     `}
                 />
                 {/* buttons */}
