@@ -66,9 +66,7 @@ export default function App() {
     const { login } = useLogin({
         onComplete: (user, isNewUser) => {
             const performSync = async () => {
-                let cachedId = localStorage.getItem("borfId");
-
-                if (isNewUser || !cachedId) {
+                if (isNewUser || !user.wasAlreadyAuthenticated) {
                     try {
                         setSyncing(true);
                         const syncedUser = await api.syncUser(user);
@@ -115,7 +113,6 @@ export default function App() {
             </div>
         );
     }
-
     store.setBorfId(borfId);
     store.setToken(identityToken);
 

@@ -115,18 +115,21 @@ export const RARITIES = {
 
 export const BIOMES = {
     amazonia: {
+        accent: `bg-canopica-light`,
         bg: `bg-canopica-dark`,
         border: `border-canopica-dark`,
         text: `text-canopica-dark`,
         icon: canopicaImg,
     },
     plushland: {
+        accent: `bg-plushland-light`,
         bg: `bg-plushland-dark`,
         border: `border-plushland-dark`,
         text: `text-plushland-dark`,
         icon: plushlandImg,
     },
     coralux: {
+        accent: `bg-coralux-light`,
         bg: `bg-coralux-dark`,
         border: `border-coralux-dark`,
         text: `text-coralux-dark`,

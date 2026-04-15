@@ -1,10 +1,11 @@
 import { usePrivy } from "@privy-io/react-auth";
+import store from "../store.js";
 
 import secretariatImg from "@images/secretariat.png";
 
 export default function Profile() {
     const { user, logout } = usePrivy();
-    const borfId = localStorage.getItem("borfId");
+    const borfId = store.getBorfId();
 
     return (
         <div className="flex-grow flex flex-col items-center justify-center overflow-hidden p-4 text-primary">
@@ -50,8 +51,8 @@ export default function Profile() {
                     <button
                         className="self-center uppercase text-black bg-primary [box-shadow:inset_-2px_-2px_0_rgba(0,0,0,0.4)] px-4 py-2"
                         onClick={() => {
-                            localStorage.removeItem("primaryWallet");
-                            localStorage.removeItem("borfId");
+                            store.clear();
+                            store.clearBorfId();
                             logout();
                         }}
                     >

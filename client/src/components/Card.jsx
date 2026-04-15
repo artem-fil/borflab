@@ -5,6 +5,7 @@ import watermarkImg from "@images/watermark.png";
 import { useState } from "react";
 
 import { BIOMES, STONES } from "../config.js";
+import store from "../store";
 
 export default function Card({ monster }) {
     const [flipped, setFlipped] = useState(false);
@@ -25,7 +26,7 @@ export default function Card({ monster }) {
     } = monster;
 
     const { border, bg, text, icon } = BIOMES[Biome];
-    const borfId = localStorage.getItem("borfId");
+    const borfId = store.getBorfId();
 
     return (
         <div

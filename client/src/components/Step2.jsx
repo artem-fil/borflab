@@ -9,6 +9,7 @@ import mintSound from "@sounds/mint.ogg";
 import printerSound from "@sounds/printer.ogg";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import store from "../store";
 import api from "../api";
 
 import { BIOMES, STONES } from "../config.js";
@@ -374,7 +375,7 @@ export default function Step2({ current, specimen, stone, biome }) {
     }
 
     const { bg, text, border, icon } = BIOMES[biome] || {};
-    const borfId = localStorage.getItem("borfId");
+    const borfId = store.getBorfId();
 
     return (
         <div className="flex flex-col h-full justify-end px-4">

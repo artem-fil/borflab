@@ -5,7 +5,7 @@ export default function Button({ onClick, disabled, label, alt = false }) {
     return (
         <button
             disabled={disabled}
-            className="relative h-10 w-20 flex items-center justify-center text-sm"
+            className={`relative h-10 w-20 flex items-center justify-center text-sm ${disabled ? "opacity-50" : ""}`}
             onClick={onClick}
         >
             <img className="absolute inset-0 w-full h-full" src={alt ? bgAlt : bg} />

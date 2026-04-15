@@ -1,9 +1,10 @@
 import Button from "@components/Button";
+import { useNavigate } from "react-router-dom";
 import Card from "@components/Card";
 import borderBottomImg from "@images/border-bottom.png";
 import borderTopImg from "@images/border-top.png";
-import buttonActiveImg from "@images/button-active.png";
-import buttonDisabledImg from "@images/button-disabled.png";
+import buttonChevronActiveImg from "@images/button-chevron-active.png";
+import buttonChevronDisabledImg from "@images/button-chevron-disabled.png";
 import slotImg from "@images/slot.png";
 import { useEffect, useState } from "react";
 
@@ -14,6 +15,7 @@ import { BIOMES } from "../config.js";
 const totalSlots = 9;
 
 export default function Library() {
+    const navigate = useNavigate();
     const [openSort, setOpenSort] = useState(false);
     const [monsters, setMonsters] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -138,7 +140,7 @@ export default function Library() {
                 ) : (
                     <div className="grid grid-cols-3 gap-x-3 gap-y-2 w-full h-full">
                         {monsters.map((monster) => {
-                            const { bg } = BIOMES[monster.Biome];
+                            const { bg, accent } = BIOMES[monster.Biome];
                             return (
                                 <div
                                     key={monster.SerialNumber}
@@ -166,7 +168,7 @@ export default function Library() {
                                         {monster.Name}
                                     </div>
                                     <div
-                                        className={`${bg} w-full h-2 rounded-sm shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)]`}
+                                        className={`${accent} w-full h-2 rounded-sm shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)]`}
                                     ></div>
                                 </div>
                             );
@@ -178,49 +180,61 @@ export default function Library() {
                 <img src={borderBottomImg} className={`h-full w-full object-cover`} />
             </div>
             {/* pagination */}
-            <div className="w-full px-4 flex gap-2 items-center justify-between py-4 text-lg">
-                <button
-                    onClick={() => handlePageChange(pagination.page - 1)}
-                    disabled={pagination.page <= 1 || loading}
-                    className="w-6 h-6 p-0 bg-transparent border-none "
-                >
-                    <img
-                        src={pagination.page <= 1 || loading ? buttonDisabledImg : buttonActiveImg}
-                        alt="Previous"
-                        className="w-full h-full object-contain transform"
-                    />
-                </button>
 
-                <div className="text-white flex gap-0.5 items-center">
-                    {String(pagination.page)
-                        .padStart(2, "0")
-                        .split("")
-                        .map((digit, index) => (
-                            <div
-                                key={index}
-                                className="font-bold bg-gradient-to-b from-stone-900 via-stone-400 via-50% to-stone-900 px-2 py-3 rounded-lg text-2xl"
-                            >
-                                {digit}
-                            </div>
-                        ))}
-                    <div className="flex flex-col ml-2">
-                        <strong className="text-sm leading-tight font-bold uppercase">BORFOLIGICAL</strong>
-                        <span className="text-xs">specimen tray no. </span>
-                    </div>
+            {monsterDialog ? (
+                <div className="w-full px-4 flex gap-2 items-center justify-center py-4 text-lg">
+                    <Button onClick={() => navigate("/swapomat")} label={"swap"} />
+                    <Button disabled label={"play"} />
                 </div>
+            ) : (
+                <div className="w-full px-4 flex gap-2 items-center justify-between py-4 text-lg">
+                    <button
+                        onClick={() => handlePageChange(pagination.page - 1)}
+                        disabled={pagination.page <= 1 || loading}
+                        className="w-6 h-6 p-0 bg-transparent border-none "
+                    >
+                        <img
+                            src={pagination.page <= 1 || loading ? buttonChevronDisabledImg : buttonChevronActiveImg}
+                            alt="Previous"
+                            className="w-full h-full object-contain transform"
+                        />
+                    </button>
 
-                <button
-                    onClick={() => handlePageChange(pagination.page + 1)}
-                    disabled={pagination.page >= pagination.pages || loading}
-                    className="w-6 h-6 p-0 bg-transparent border-none"
-                >
-                    <img
-                        src={pagination.page >= pagination.pages || loading ? buttonDisabledImg : buttonActiveImg}
-                        alt="Next"
-                        className="w-full h-full object-contain -scale-x-100"
-                    />
-                </button>
-            </div>
+                    <div className="text-white flex gap-0.5 items-center">
+                        {String(pagination.page)
+                            .padStart(2, "0")
+                            .split("")
+                            .map((digit, index) => (
+                                <div
+                                    key={index}
+                                    className="font-bold bg-gradient-to-b from-stone-900 via-stone-400 via-50% to-stone-900 px-2 py-3 rounded-lg text-2xl"
+                                >
+                                    {digit}
+                                </div>
+                            ))}
+                        <div className="flex flex-col ml-2">
+                            <strong className="text-sm leading-tight font-bold uppercase">BORFOLIGICAL</strong>
+                            <span className="text-xs">specimen tray no. </span>
+                        </div>
+                    </div>
+
+                    <button
+                        onClick={() => handlePageChange(pagination.page + 1)}
+                        disabled={pagination.page >= pagination.pages || loading}
+                        className="w-6 h-6 p-0 bg-transparent border-none"
+                    >
+                        <img
+                            src={
+                                pagination.page >= pagination.pages || loading
+                                    ? buttonChevronDisabledImg
+                                    : buttonChevronActiveImg
+                            }
+                            alt="Next"
+                            className="w-full h-full object-contain -scale-x-100"
+                        />
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
