@@ -1,11 +1,10 @@
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 
 import cardfrontImg from "@images/card-front.png";
 import swapomatImg from "@images/swapomat.png";
 import watermarkImg from "@images/watermark.png";
 import { useWallets } from "@privy-io/react-auth/solana";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import api from "../api";
 import { BIOMES, RARITIES, STONES } from "../config.js";
 
@@ -13,6 +12,7 @@ const totalSlots = 9;
 
 export default function Swapomat() {
     const { wallets } = useWallets();
+    const navigate = useNavigate();
     const { monsterId } = useParams();
 
     const [monsters, setMonsters] = useState([]);
@@ -139,6 +139,27 @@ export default function Swapomat() {
         setStatus("swapping");
         setGainedMonster(null);
         startSlotSpin();
+        /*
+        setTimeout(() => {
+            // Берем случайного монстра из пула как результат
+            const randomResult = swapPool[Math.floor(Math.random() * swapPool.length)];
+
+            if (!randomResult) {
+                setStatus("error");
+                cleanupMint();
+                return;
+            }
+
+            setGainedMonster(randomResult);
+            slowDownSlot(randomResult); // Запускаем замедление до этой карты
+
+            // Финализируем статус после того как анимация замедления (~1.8сек) закончится
+            setTimeout(() => {
+                setStatus("success");
+                cleanupMint();
+            }, 1850);
+        }, 10000); // "Транзакция" идет 3 секунды
+        */
 
         const solanaWallet = activeWallet;
 
@@ -198,6 +219,7 @@ export default function Swapomat() {
     if (!activeWallet) return <span>Loading wallets…</span>;
 
     const isSpinning = status === "swapping";
+    const isSuccess = status === "success";
     const isFinished = status === "success" || status === "error";
     const canSubmit = monster !== null && !isSpinning;
     const displayCard = slotMonster;
@@ -205,24 +227,34 @@ export default function Swapomat() {
 
     return (
         <div
+            onClick={() => isSuccess && navigate("/library")}
             className={`flex-grow flex flex-col items-center justify-center overflow-hidden p-4 ${isSpinning ? "shake-machine" : ""}`}
         >
             <style>{`
                 @keyframes industrial-shake {
-                    0%   { transform: translate(0,0) rotate(0); }
-                    25%  { transform: translate(1.5px,-1.5px) rotate(0.15deg); }
-                    50%  { transform: translate(-1.5px,1.5px) rotate(-0.15deg); }
-                    75%  { transform: translate(1.5px,1.5px) rotate(0.05deg); }
-                    100% { transform: translate(0,0) rotate(0); }
+                    0%   { transform: translate(0,0); }
+                    50%  { transform: translate(-2px, 2px); }
+                    100% { transform: translate(0,0); }
                 }
                 .shake-machine { animation: industrial-shake 0.1s infinite linear; }
 
+                @keyframes white-flash {
+                    0%   { opacity: 0; }
+                    10%  { opacity: 1; }
+                    100% { opacity: 0; }
+                }
+                .flash-effect { 
+                    animation: white-flash 0.6s ease-out forwards; 
+                    pointer-events: none;
+                }
+
+                .slot-card-enter { animation: slide-in-left 0.06s ease-out; }
                 @keyframes slide-in-left {
                     from { transform: translateX(-110%); opacity: 0.5; }
                     to   { transform: translateX(0);     opacity: 1; }
                 }
-                .slot-card-enter { animation: slide-in-left 0.06s ease-out; }
             `}</style>
+            {isSuccess && <div className="fixed inset-0 bg-white z-[100] flash-effect" />}
 
             <div className="relative max-h-full flex items-center justify-center" style={{ aspectRatio: "1 / 2" }}>
                 <img className="max-h-auto object-contain" src={swapomatImg} alt="swapomat" />
@@ -231,7 +263,11 @@ export default function Swapomat() {
                 <div
                     className="-translate-x-1/2 left-1/2 absolute overflow-hidden cursor-pointer"
                     style={{ width: "66%", top: "17%", aspectRatio: "0.62 / 1" }}
-                    onClick={() => !isSpinning && !isFinished && setDialog(true)}
+                    onClick={(e) => {
+                        if (status === "swapping" || isSuccess) return;
+                        e.stopPropagation();
+                        setDialog(true);
+                    }}
                 >
                     {displayCard && (
                         <div
@@ -255,7 +291,7 @@ export default function Swapomat() {
                                     <hr className={`border-0 h-0.5 ${bg}`} />
                                     <div className="relative flex-grow flex p-0.5">
                                         <img
-                                            src={displayCard.ThumbUrl}
+                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${displayCard.ImageCid}`}
                                             className="max-h-full max-w-full w-auto h-auto object-contain mr-auto ml-auto z-10"
                                             alt="output"
                                         />
@@ -345,7 +381,11 @@ export default function Swapomat() {
                                     className="flex flex-col gap-1 items-center uppercase text-[10px] cursor-pointer hover:scale-105 transition-transform"
                                 >
                                     <div className="w-full aspect-[3/4] bg-gray-200 rounded-md overflow-hidden border-2 border-transparent hover:border-green-400">
-                                        <img src={m.ThumbUrl} alt={m.Name} className="h-full object-cover" />
+                                        <img
+                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${m.ImageCid}`}
+                                            alt={m.Name}
+                                            className="h-full object-cover"
+                                        />
                                     </div>
                                     <span className={`${RARITIES[m.Rarity]} text-center`}>{m.Name}</span>
                                 </div>
@@ -373,89 +413,6 @@ export default function Swapomat() {
                         </button>
                     </div>
                 )}
-
-                {/* ─── Оверлей результата (только success/error, не во время спина) */}
-                {isFinished &&
-                    createPortal(
-                        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
-                            <div className="flex flex-col items-center text-white p-6 rounded-xl bg-black/90 border-2 border-green-800 shadow-2xl">
-                                {status === "success" && gainedMonster ? (
-                                    <>
-                                        {/* карточка результата — идентичная разметка, без дублирования логики отображения */}
-                                        <div
-                                            className="w-48 relative text-green-800 text-xs p-1"
-                                            style={{ aspectRatio: "0.62 / 1", fontSize: "8px" }}
-                                        >
-                                            <img
-                                                className="absolute inset-0 w-full h-full"
-                                                src={cardfrontImg}
-                                                alt="card front"
-                                            />
-                                            <div className="relative p-0.5 pb-5 w-full h-full">
-                                                <div className="flex flex-col w-full h-full rounded-xl border-4 border-green-800 bg-orange-100">
-                                                    <p className="uppercase text-center">
-                                                        borflab // top secret // specimen
-                                                    </p>
-                                                    <hr className="border-0 h-0.5 bg-green-800" />
-                                                    <div className="flex-grow flex overflow-hidden p-1">
-                                                        <img
-                                                            src={gainedMonster.ThumbUrl}
-                                                            className="mr-auto ml-auto h-full object-cover"
-                                                            alt="output"
-                                                        />
-                                                    </div>
-                                                    <hr className="border-0 h-0.5 bg-green-800" />
-                                                    <div className="flex justify-between p-0.5">
-                                                        <div className="flex flex-col justify-between">
-                                                            <h1 className="leading-tight uppercase font-bold text-lg">
-                                                                {gainedMonster.Name}
-                                                            </h1>
-                                                            <p className="uppercase leading-none text-sm">
-                                                                species: <strong>{gainedMonster.Species}</strong>
-                                                            </p>
-                                                        </div>
-                                                        <div className="border-2 border-green-800">
-                                                            <h1 className="px-0.5 text-lg font-bold text-center">I</h1>
-                                                            <hr className="border-0 h-0.5 bg-green-800" />
-                                                            <span className="px-0.5">chapter</span>
-                                                        </div>
-                                                    </div>
-                                                    <p className="p-0.5 text-sm uppercase text-gray-100 bg-green-800">
-                                                        biome:{" "}
-                                                        <strong className="text-orange-400">
-                                                            {gainedMonster.Biome}
-                                                        </strong>
-                                                    </p>
-                                                    <p className="leading-tight px-0.5">
-                                                        <strong className="uppercase">observation: </strong>
-                                                        {gainedMonster.Lore}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <span className="text-green-400 font-bold uppercase tracking-widest text-center mt-4">
-                                            Minting Complete
-                                        </span>
-                                        <Link
-                                            to="/library"
-                                            className="bg-green-700 px-4 py-2 rounded text-sm hover:bg-green-600 transition-colors mt-2"
-                                        >
-                                            Open Library
-                                        </Link>
-                                    </>
-                                ) : (
-                                    <>
-                                        <span className="text-2xl">❌</span>
-                                        <span className="text-red-400 font-bold uppercase">System Failure</span>
-                                        <button onClick={handleDismiss} className="text-xs underline mt-2">
-                                            Dismiss
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-                        </div>,
-                        document.body
-                    )}
             </div>
         </div>
     );
