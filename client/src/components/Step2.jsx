@@ -9,18 +9,11 @@ import mintSound from "@sounds/mint.ogg";
 import printerSound from "@sounds/printer.ogg";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import store from "../store";
 import api from "../api";
+import store from "../store";
 
 import { BIOMES, STONES } from "../config.js";
 
-// ─── КОНСТАНТЫ ВРЕМЕНИ ────────────────────────────────────────────
-const ANALYZE_DURATION_MS = 15_000;
-const GENERATE_DURATION_MS = 45_000;
-const PHRASE_INTERVAL_MS = 4_000;
-const ANALYZE_PROGRESS_END = 20;
-const GENERATE_PROGRESS_END = 95;
-const ANALYZE_PHRASE_COUNT = 2;
 // ──────────────────────────────────────────────────────────────────
 
 const monsterPhrases = [
@@ -60,10 +53,9 @@ export default function Step2({ current, specimen, stone, biome }) {
     const [mintSuccess, setMintSuccess] = useState(false);
     const [mintError, setMintError] = useState(false);
     const [activeWallet, setActiveWallet] = useState(null);
-    const [bubble, setBubble] = useState(null); // null | string
+    const [bubble, setBubble] = useState(null);
 
     const monitorRef = useRef(null);
-    const sseRef = useRef(null);
     const queueRef = useRef(Promise.resolve());
     const audioMint = useRef(new Audio(mintSound));
     const audioLab = useRef(new Audio(labSound));
@@ -71,20 +63,23 @@ export default function Step2({ current, specimen, stone, biome }) {
     const hasStarted = useRef(false);
     const backCardRef = useRef(null);
     const frontCardRef = useRef(null);
-    const mintSSERef = useRef(null);
-    const mintTimeoutRef = useRef(null);
-    const progressAnimRef = useRef(null);
-    const phraseTimerRef = useRef(null);
-    const phraseIndexRef = useRef(0);
+
+    const phraseIndexRef = useRef(0); // оставляем, но используем иначе
+
+    // Polling state
+    const pollTimerRef = useRef(null); // current setTimeout handle
+    const visibilityHandlerRef = useRef(null); // for cleanup
+    const pollCancelledRef = useRef(false); // stop flag
 
     const { wallets } = useWallets();
+
+    // ─── setup ────────────────────────────────────────────────────────────────
 
     useEffect(() => {
         if (wallets?.length > 0) {
             const stored = localStorage.getItem("primaryWallet");
             setActiveWallet(wallets.find((w) => w.address === stored) || wallets[0]);
         }
-
         if (specimen instanceof Blob) {
             const url = URL.createObjectURL(specimen);
             setPreviewUrl(url);
@@ -106,13 +101,11 @@ export default function Step2({ current, specimen, stone, biome }) {
 
     useEffect(() => {
         if (!mintSuccess) return;
-
         const interval = setInterval(() => {
             const phrase = monsterPhrases[Math.floor(Math.random() * monsterPhrases.length)];
             setBubble(phrase);
             setTimeout(() => setBubble(null), 2000);
         }, 7000);
-
         return () => clearInterval(interval);
     }, [mintSuccess]);
 
@@ -126,78 +119,157 @@ export default function Step2({ current, specimen, stone, biome }) {
         if (phase !== "GENERATING" && phase !== "MINTING") return;
         if (!backCardRef.current) return;
 
-        const rangeStart = ANALYZE_PROGRESS_END;
-        const rangeEnd = GENERATE_PROGRESS_END;
-
-        const clamped = Math.min(Math.max(progress, rangeStart), rangeEnd);
-        const t = (clamped - rangeStart) / (rangeEnd - rangeStart); // 0..1
-        const translateY = 100 - t * 100; // 100%..0%
+        // прогресс в фазе генерации идёт от P.Analyzed до 100
+        // нормализуем в 0..1 относительно этого диапазона
+        const PHASE_START = 15; // та же цифра что P.Analyzed на сервере, ~23
+        const t = Math.min(Math.max((progress - PHASE_START) / (100 - PHASE_START), 0), 1);
+        const translateY = 100 - t * 100;
 
         backCardRef.current.style.transitionDuration = "300ms";
         backCardRef.current.style.transform = `translateY(${translateY}%)`;
     }, [progress, phase]);
 
-    useEffect(() => {
-        return () => {
-            stopAllTimers();
-            audioLab.current.pause();
-            audioPrinter.current.pause();
-            sseRef.current?.close();
-            mintSSERef.current?.close();
-            clearTimeout(mintTimeoutRef.current);
-        };
-    }, []);
+    // ─── audio ────────────────────────────────────────────────────────────────
 
     function stopAllAudio() {
-        audioLab.current.pause();
-        audioPrinter.current.pause();
-        audioMint.current.pause();
-        audioLab.current.currentTime = 0;
-        audioPrinter.current.currentTime = 0;
-        audioMint.current.currentTime = 0;
+        [audioLab, audioPrinter, audioMint].forEach((r) => {
+            r.current.pause();
+            r.current.currentTime = 0;
+        });
     }
 
-    function stopAllTimers() {
-        clearInterval(progressAnimRef.current);
-        clearInterval(phraseTimerRef.current);
+    function maybeAdvancePhrase(progress) {
+        if (phraseIndexRef.current >= progressMessages.length) return;
+
+        // каждая фраза занимает равный кусок прогресса
+        const step = 100 / progressMessages.length;
+        const expectedIndex = Math.floor(progress / step);
+
+        while (phraseIndexRef.current <= expectedIndex && phraseIndexRef.current < progressMessages.length) {
+            appendTypedLine(progressMessages[phraseIndexRef.current]);
+            phraseIndexRef.current++;
+        }
+    }
+    function pollTask(taskId, { onProgress, totalTimeoutMs = 180_000 } = {}) {
+        return new Promise((resolve, reject) => {
+            pollCancelledRef.current = false;
+            const startTime = Date.now();
+            const BASE_MS = 1000;
+            const MAX_MS = 8000;
+            let networkErrors = 0;
+
+            const doPoll = async () => {
+                if (pollCancelledRef.current) return;
+
+                if (Date.now() - startTime > totalTimeoutMs) {
+                    reject(new Error("Task timeout"));
+                    return;
+                }
+
+                try {
+                    const status = await api.getTaskStatus(taskId);
+                    networkErrors = 0; // reset backoff on any successful HTTP response
+
+                    if (status.progress != null) {
+                        setProgress((prev) => Math.max(prev, status.progress));
+                        maybeAdvancePhrase(status.progress);
+                    }
+
+                    if (status.failed) {
+                        reject(new Error(status.error || "Task failed"));
+                        return;
+                    }
+
+                    if (status.done) {
+                        resolve({ result: status.result, nextTaskId: status.nextTaskId });
+                        return;
+                    }
+                    pollTimerRef.current = setTimeout(doPoll, BASE_MS);
+                } catch (err) {
+                    networkErrors++;
+                    const delay = Math.min(BASE_MS * Math.pow(2, networkErrors - 1), MAX_MS);
+                    pollTimerRef.current = setTimeout(doPoll, delay);
+                }
+            };
+
+            // When the user returns from another app / unlocks the phone,
+            // fire immediately rather than waiting for the current timer.
+            const onVisibilityChange = () => {
+                if (document.visibilityState === "visible") {
+                    clearTimeout(pollTimerRef.current);
+                    doPoll();
+                }
+            };
+            document.addEventListener("visibilitychange", onVisibilityChange);
+            visibilityHandlerRef.current = onVisibilityChange;
+
+            doPoll();
+        });
     }
 
-    function startProgressAnimation(fromPct, toPct, durationMs) {
-        const startTime = Date.now();
+    function pollMintStatus(expId, { totalTimeoutMs = 90_000 } = {}) {
+        return new Promise((resolve, reject) => {
+            pollCancelledRef.current = false;
+            const startTime = Date.now();
+            const INTERVAL_MS = 2000;
+            let networkErrors = 0;
 
-        clearInterval(progressAnimRef.current);
-        progressAnimRef.current = setInterval(() => {
-            const elapsed = Date.now() - startTime;
-            const t = Math.min(elapsed / durationMs, 1);
-            const eased = 1 - Math.pow(1 - t, 2); // ease-out
-            const current = fromPct + (toPct - fromPct) * eased;
-            setProgress(Math.round(current));
+            const doPoll = async () => {
+                if (pollCancelledRef.current) return;
 
-            if (t >= 1) clearInterval(progressAnimRef.current);
-        }, 100);
+                if (Date.now() - startTime > totalTimeoutMs) {
+                    reject(new Error("Mint timeout"));
+                    return;
+                }
+
+                try {
+                    const status = await api.getMintStatus(expId);
+                    networkErrors = 0;
+
+                    if (status.status === "confirmed") {
+                        resolve();
+                        return;
+                    }
+                    if (status.status === "failed") {
+                        reject(new Error(status.error || "Mint failed"));
+                        return;
+                    }
+
+                    pollTimerRef.current = setTimeout(doPoll, INTERVAL_MS);
+                } catch (err) {
+                    networkErrors++;
+                    const delay = Math.min(INTERVAL_MS * Math.pow(2, networkErrors - 1), 8000);
+                    pollTimerRef.current = setTimeout(doPoll, delay);
+                }
+            };
+
+            const onVisibilityChange = () => {
+                if (document.visibilityState === "visible") {
+                    clearTimeout(pollTimerRef.current);
+                    doPoll();
+                }
+            };
+            document.addEventListener("visibilitychange", onVisibilityChange);
+            visibilityHandlerRef.current = onVisibilityChange;
+
+            doPoll();
+        });
     }
 
-    function startPhrases(fromIndex, count) {
-        clearInterval(phraseTimerRef.current);
-        phraseIndexRef.current = fromIndex;
-
-        phraseTimerRef.current = setInterval(() => {
-            const idx = phraseIndexRef.current;
-            if (idx < fromIndex + count && idx < progressMessages.length) {
-                appendTypedLine(progressMessages[idx]);
-                phraseIndexRef.current++;
-            } else {
-                clearInterval(phraseTimerRef.current);
-            }
-        }, PHRASE_INTERVAL_MS);
+    function stopPolling() {
+        pollCancelledRef.current = true;
+        clearTimeout(pollTimerRef.current);
+        if (visibilityHandlerRef.current) {
+            document.removeEventListener("visibilitychange", visibilityHandlerRef.current);
+            visibilityHandlerRef.current = null;
+        }
     }
+
+    // ─── workflow ─────────────────────────────────────────────────────────────
 
     async function runWorkflow() {
         audioLab.current.volume = 0.5;
         audioLab.current.play();
-
-        startProgressAnimation(0, ANALYZE_PROGRESS_END, ANALYZE_DURATION_MS);
-        startPhrases(0, ANALYZE_PHRASE_COUNT);
 
         try {
             const formData = new FormData();
@@ -206,93 +278,52 @@ export default function Step2({ current, specimen, stone, biome }) {
             formData.append("stone", stone.Type);
 
             const { Id } = await api.analyze(formData);
-            await startSseSequence({ taskId: Id, mode: "ANALYZE" });
+
+            // ── analyze ───────────────────────────────────────────────────────
+            const { result, nextTaskId } = await pollTask(Id);
+
+            setAnalyzeResult(result);
+            await appendTypedLine("Analysis complete.");
+            await appendTypedLine("Starting transmutation...");
+
+            setPhase("GENERATING");
+            audioLab.current.pause();
+            audioPrinter.current.loop = true;
+            audioPrinter.current.volume = 0.5;
+            audioPrinter.current.play();
+
+            stopPolling(); // detach old visibility listener before next poll
+
+            // ── generate ──────────────────────────────────────────────────────
+            const { result: genResult } = await pollTask(nextTaskId);
+
+            stopPolling();
+            setProgress(100);
+            await appendTypedLine("💶 Initializing uplink ✅");
+
+            const { image: imgData, experimentId: expId } = genResult;
+            setImage(imgData);
+            setExperimentId(expId);
+
+            await triggerAutoMint(expId);
         } catch (err) {
-            stopAllTimers();
+            stopPolling();
             stopAllAudio();
             appendTypedLine(`❌ ERROR: ${err.message || "Unknown error"}`);
         }
     }
 
-    async function startSseSequence({ taskId, mode }) {
-        return new Promise((resolve, reject) => {
-            const TIMEOUT_MS = 180000;
-
-            const timeout = setTimeout(() => {
-                sseRef.current?.close();
-                reject(new Error(`${mode} timeout`));
-            }, TIMEOUT_MS);
-
-            sseRef.current = api.subscribeSSE(taskId, {
-                onEvent: async (event, data) => {
-                    if (event === "done") {
-                        clearTimeout(timeout);
-                        sseRef.current?.close();
-
-                        if (mode === "ANALYZE") {
-                            const { result, nextTask } = data;
-                            setAnalyzeResult(result);
-                            await appendTypedLine("Analysis complete.");
-                            await appendTypedLine("Starting transmutation...");
-
-                            setPhase("GENERATING");
-                            audioLab.current.pause();
-                            audioPrinter.current.loop = true;
-                            audioPrinter.current.volume = 0.5;
-                            audioPrinter.current.play();
-
-                            startProgressAnimation(ANALYZE_PROGRESS_END, GENERATE_PROGRESS_END, GENERATE_DURATION_MS);
-                            startPhrases(ANALYZE_PHRASE_COUNT, progressMessages.length - ANALYZE_PHRASE_COUNT);
-
-                            try {
-                                await startSseSequence({ taskId: nextTask, mode: "GENERATE" });
-                                resolve();
-                            } catch (err) {
-                                reject(err);
-                            }
-                        } else {
-                            stopAllTimers();
-                            setProgress(100);
-
-                            await appendTypedLine("💶 Initializing uplink ✅");
-                            const { image: imgData, experimentId: expId } = data;
-                            setImage(imgData);
-                            setExperimentId(expId);
-
-                            triggerAutoMint(expId);
-                            resolve();
-                        }
-                    }
-
-                    if (event === "failed") {
-                        clearTimeout(timeout);
-                        sseRef.current?.close();
-                        stopAllTimers();
-                        stopAllAudio();
-                        reject(new Error(data.error || "Task failed"));
-                    }
-                },
-                onError: (err) => {
-                    clearTimeout(timeout);
-                    sseRef.current?.close();
-                    stopAllTimers();
-                    stopAllAudio();
-                    reject(err);
-                },
-            });
-        });
-    }
+    // ─── mint ─────────────────────────────────────────────────────────────────
 
     async function triggerAutoMint(expId) {
         setPhase("MINTING");
-
         audioPrinter.current.pause();
         audioPrinter.current.currentTime = 0;
         audioMint.current.loop = true;
         audioMint.current.volume = 0.3;
         audioMint.current.play();
 
-        handleMintAction(expId);
+        await handleMintAction(expId);
     }
 
     async function handleMintAction(expId) {
@@ -300,53 +331,40 @@ export default function Step2({ current, specimen, stone, biome }) {
         setIsMinting(true);
 
         try {
-            mintTimeoutRef.current = setTimeout(() => {
-                mintSSERef.current?.close();
-                setIsMinting(false);
-                setMintError(true);
-                setDisplayed((prev) => prev + "❌ UPLINK TIMEOUT\n");
-            }, 60000);
-
-            mintSSERef.current = api.subscribeSSE(activeWallet.address, {
-                onEvent: (event) => {
-                    if (event === "confirmed") {
-                        setMintSuccess(true);
-                        setIsMinting(false);
-                        setPhase("READY");
-                        setDisplayed((prev) => prev + "SPIRAL INDEX REGISTERED ✅\n");
-                        cleanupMint();
-                        showFrontCard();
-                    }
-                    if (event === "failed") {
-                        setMintError(true);
-                        setIsMinting(false);
-                        setDisplayed((prev) => prev + "❌ CHAIN REJECTED\n");
-                        cleanupMint();
-                    }
-                },
-            });
-
+            // This call builds + sends the Solana tx server-side and returns fast.
+            // The server then tracks confirmation in a goroutine.
             await api.prepareMonsterMint(expId, {
                 userPubKey: activeWallet.address,
                 stone: stone.Type,
             });
-        } catch (err) {
+
+            // Poll the server for on-chain confirmation instead of a second SSE.
+            await pollMintStatus(expId);
+
+            stopPolling();
+            setMintSuccess(true);
             setIsMinting(false);
+            setPhase("READY");
+            setDisplayed((prev) => prev + "SPIRAL INDEX REGISTERED ✅\n");
+            showFrontCard();
+        } catch (err) {
+            stopPolling();
             stopAllAudio();
-            setDisplayed((prev) => prev + `❌ ERROR: ${err.message}\n`);
+            setIsMinting(false);
+            setMintError(true);
+            setDisplayed((prev) => prev + `❌ ${err.message}\n`);
         }
     }
 
+    // ─── card reveal ──────────────────────────────────────────────────────────
+
     function showFrontCard() {
         stopAllAudio();
-
         const BACK_OUT_DURATION = 1000;
-
         if (backCardRef.current) {
             backCardRef.current.style.transitionDuration = `${BACK_OUT_DURATION}ms`;
             backCardRef.current.style.transform = "translateY(100%)";
         }
-
         if (frontCardRef.current) {
             const el = frontCardRef.current;
             el.style.transitionDuration = "1500ms";
@@ -356,11 +374,7 @@ export default function Step2({ current, specimen, stone, biome }) {
         }
     }
 
-    function cleanupMint() {
-        clearTimeout(mintTimeoutRef.current);
-        stopAllAudio();
-        mintSSERef.current?.close();
-    }
+    // ─── typed output ─────────────────────────────────────────────────────────
 
     async function appendTypedLine(line) {
         if (!line) return;
@@ -373,6 +387,8 @@ export default function Step2({ current, specimen, stone, biome }) {
         });
         return queueRef.current;
     }
+
+    // ─── render ───────────────────────────────────────────────────────────────
 
     const { bg, text, border, icon } = BIOMES[biome] || {};
     const borfId = store.getBorfId();

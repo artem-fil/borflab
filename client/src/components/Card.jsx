@@ -22,6 +22,8 @@ export default function Card({ monster }) {
         Size,
         Personality,
         ImageCid,
+        ThumbUrl,
+        InputUrl,
         Created,
     } = monster;
 
@@ -74,7 +76,7 @@ export default function Card({ monster }) {
                             <div className=" flex w-full items-center">
                                 <div className=" flex items-center p-1 h-24 w-1/3">
                                     <img
-                                        src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${ImageCid}`}
+                                        src={InputUrl}
                                         className="ml-auto mr-auto rounded object-cover"
                                         alt="input image"
                                     />
@@ -146,7 +148,7 @@ export default function Card({ monster }) {
                             <hr className={`border-0 h-0.5 ${bg}`} />
                             <div className="relative flex-grow flex overflow-hidden p-1">
                                 <img
-                                    src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${ImageCid}`}
+                                    src={ThumbUrl}
                                     className="max-h-full max-w-full w-auto h-auto object-contain mr-auto ml-auto z-10"
                                     alt="output"
                                 />

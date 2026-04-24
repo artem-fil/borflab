@@ -255,7 +255,7 @@ export default function Swapomat() {
                                     <hr className={`border-0 h-0.5 ${bg}`} />
                                     <div className="relative flex-grow flex p-0.5">
                                         <img
-                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${displayCard.ImageCid}`}
+                                            src={displayCard.ThumbUrl}
                                             className="max-h-full max-w-full w-auto h-auto object-contain mr-auto ml-auto z-10"
                                             alt="output"
                                         />
@@ -345,11 +345,7 @@ export default function Swapomat() {
                                     className="flex flex-col gap-1 items-center uppercase text-[10px] cursor-pointer hover:scale-105 transition-transform"
                                 >
                                     <div className="w-full aspect-[3/4] bg-gray-200 rounded-md overflow-hidden border-2 border-transparent hover:border-green-400">
-                                        <img
-                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${m.ImageCid}`}
-                                            alt={m.Name}
-                                            className="h-full object-cover"
-                                        />
+                                        <img src={m.ThumbUrl} alt={m.Name} className="h-full object-cover" />
                                     </div>
                                     <span className={`${RARITIES[m.Rarity]} text-center`}>{m.Name}</span>
                                 </div>
@@ -403,7 +399,7 @@ export default function Swapomat() {
                                                     <hr className="border-0 h-0.5 bg-green-800" />
                                                     <div className="flex-grow flex overflow-hidden p-1">
                                                         <img
-                                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${gainedMonster.ImageCid}`}
+                                                            src={gainedMonster.ThumbUrl}
                                                             className="mr-auto ml-auto h-full object-cover"
                                                             alt="output"
                                                         />

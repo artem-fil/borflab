@@ -29,19 +29,40 @@ import (
 )
 
 const (
-	OPENAI_COMPLETION_URL = "https://api.openai.com/v1/chat/completions"
+	OPENAI_COMPLETION_URL     = "https://api.openai.com/v1/chat/completions"
 	OPENAI_GENERATION_URL     = "https://api.openai.com/v1/images/generations"
 	PINATA_PIN_FILE_URL       = "https://api.pinata.cloud/pinning/pinFileToIPFS"
 	TOKEN_METADATA_PROGRAM_ID = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+	R2_ENDPOINT               = "https://62957615d09dddc1af2ae1c5423e6632.r2.cloudflarestorage.com"
+	AVG_ANALYZE_TIME          = 15 // OpenAI vision call (gpt-4o)
+	AVG_GENERATE_TIME         = 40 // OpenAI image generation (gpt-image-1.5)
+	AVG_UPLOAD_TIME           = 8  // Pinata: image + metadata
+	AVG_MINT_TIME             = 20 // Solana tx confirmation (используется как таймаут-хинт)
 )
 
 var (
-	tasks = sync.Map{}
+	tasks             sync.Map // taskId → *TaskStatus
+	mintStatuses      sync.Map // experimentId (string) → *MintStatus
+	totalPipelineTime = AVG_ANALYZE_TIME + AVG_GENERATE_TIME + AVG_UPLOAD_TIME
+	P                 = struct {
+		Started   int // промпты собраны, запрос строится
+		Analyzed  int // записано в БД, nextTask создан
+		Generated int // картинка получена
+		Uploaded  int // картинка и метадата загружены на Pinata
+		Finished  int // всё сохранено в БД
+	}{
+		Started:   pct(1),
+		Analyzed:  pct(AVG_ANALYZE_TIME),
+		Generated: pct(AVG_ANALYZE_TIME + AVG_GENERATE_TIME - 1),
+		Uploaded:  pct(AVG_ANALYZE_TIME + AVG_GENERATE_TIME + AVG_UPLOAD_TIME),
+		Finished:  100,
+	}
 )
 
 type api struct {
 	cfg       *Config
 	db        *DB
+	r2        *R2Client
 	telegram  *Telegram
 	rpcClient *rpc.Client
 	sseAgent  *SSEAgent
@@ -71,9 +92,15 @@ var productsCatalog = map[string]Product{
 	},
 }
 
-func NewApi(cfg *Config, db *DB, telegram *Telegram, rpcClient *rpc.Client, sseAgent *SSEAgent) *api {
+type MintStatus struct {
+	Status    string `json:"status"` // pending | confirmed | failed
+	Signature string `json:"signature,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
 
-	return &api{cfg, db, telegram, rpcClient, sseAgent}
+func NewApi(cfg *Config, db *DB, r2 *R2Client, telegram *Telegram, rpcClient *rpc.Client, sseAgent *SSEAgent) *api {
+
+	return &api{cfg, db, r2, telegram, rpcClient, sseAgent}
 }
 
 func (a *api) SyncUser(w *Responder, r *http.Request) {
@@ -483,14 +510,56 @@ func (a *api) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (a *api) GetTaskStatus(w *Responder, r *http.Request) {
+	taskId := Param(r)
+	if taskId == "" {
+		a.BadRequestError(w, fmt.Errorf("task id required"))
+		return
+	}
+
+	raw, ok := tasks.Load(taskId)
+	if !ok {
+		a.BadRequestError(w, fmt.Errorf("task not found"))
+		return
+	}
+
+	ts := raw.(*TaskStatus)
+
+	w.Send(map[string]any{
+		"progress":   ts.ComputeProgress(),
+		"done":       ts.Done,
+		"failed":     ts.Failed,
+		"error":      ts.Error,
+		"result":     ts.Result,
+		"nextTaskId": ts.NextTaskId,
+	})
+}
+
+func (a *api) GetMintStatus(w *Responder, r *http.Request) {
+	expId := Param(r)
+	if expId == "" {
+		a.BadRequestError(w, fmt.Errorf("experiment id required"))
+		return
+	}
+
+	raw, ok := mintStatuses.Load(expId)
+	if !ok {
+		// not yet stored – transaction not sent yet or expId wrong
+		w.Send(&MintStatus{Status: "pending"})
+		return
+	}
+
+	w.Send(raw.(*MintStatus))
+}
+
 func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 
 	taskID := uuid.NewString()
 
-	tasks.Store(taskID, &TaskStatus{
-		Progress: 0,
-		Done:     false,
-	})
+	ts := &TaskStatus{Progress: 0, Done: false}
+	ts.SetStage(P.Started, P.Analyzed, AVG_ANALYZE_TIME)
+	tasks.Store(taskID, ts)
+	tasks.Store(taskID, ts)
 
 	time.AfterFunc(5*time.Minute, func() {
 		tasks.Delete(taskID)
@@ -532,33 +601,36 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		return
 	}
 
-	resizedImg, err := resizeAndConvert(bytes.NewReader(imgBytes), 1024)
+	storageImg, err := ResizeJPEG(imgBytes, 400)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+	// 1024px для OpenAI — лучше качество анализа
+	analysisImg, err := ResizeJPEG(imgBytes, 1024)
 	if err != nil {
 		a.InternalError(w, err)
 		return
 	}
 
-	// processed metadata
-	processedMime, processedWidth, processedHeight, processedSize, err := imageInfo(resizedImg)
-	if err != nil {
-		a.InternalError(w, err)
+	expUUID := uuid.NewString()
+	inputKey := fmt.Sprintf("monsters/%s/input.jpg", expUUID)
+
+	if err := a.r2.Upload(r.Context(), inputKey, "image/jpeg", storageImg); err != nil {
+		a.InternalError(w, fmt.Errorf("cannot upload input to r2: %w", err))
 		return
 	}
 
 	experiment := &Experiment{
-		UserId:          claims.Id,
-		InputMime:       inputMime,
-		InputWidth:      inputWidth,
-		InputHeight:     inputHeight,
-		InputSize:       inputSize,
-		ProcessedMime:   processedMime,
-		ProcessedWidth:  processedWidth,
-		ProcessedHeight: processedHeight,
-		ProcessedSize:   processedSize,
-		ProcessedImage:  resizedImg,
-		Stone:           StoneType(selectedStone.Type),
-		Biome:           *biome,
-		Created:         time.Now().UTC(),
+		UUID:        expUUID,
+		UserId:      claims.Id,
+		InputMime:   inputMime,
+		InputWidth:  inputWidth,
+		InputHeight: inputHeight,
+		InputSize:   inputSize,
+		InputUrl:    a.r2.URL(inputKey),
+		Stone:       StoneType(selectedStone.Type),
+		Biome:       *biome,
 	}
 	insertedExperiment, err := a.db.InsertExperiment(r.Context(), experiment)
 	if err != nil {
@@ -566,18 +638,12 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		return
 	}
 
-	go a.processImage(taskID, resizedImg, insertedExperiment)
+	go a.processImage(taskID, analysisImg, insertedExperiment)
 
-	response := struct {
-		Id string
-	}{
-		Id: taskID,
-	}
-	w.Send(response)
+	w.Send(struct{ Id string }{Id: taskID})
 }
 
 func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experiment) {
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -585,26 +651,31 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		if r := recover(); r != nil {
 			errStr := fmt.Sprintf("LAB FATAL ERROR: %v", r)
 			LogError("API", "Panic recovery in processImage", fmt.Errorf("%v", r))
-			a.sseAgent.Emit(taskId, "failed", map[string]any{"error": errStr})
+			raw, ok := tasks.Load(taskId)
+			if !ok {
+				return
+			}
+			ts := raw.(*TaskStatus)
+			ts.Failed = true
+			ts.Error = errStr
+			ts.Done = true
 		}
 	}()
 
-	ts := &TaskStatus{
-		Progress: 0,
-		Done:     false,
-	}
-	tasks.Store(taskId, ts)
+	raw, _ := tasks.Load(taskId)
+	ts := raw.(*TaskStatus)
+	time.AfterFunc(10*time.Minute, func() { tasks.Delete(taskId) })
 
-	time.AfterFunc(10*time.Minute, func() {
-		tasks.Delete(taskId)
-	})
-
+	setProgress := func(p int) { ts.Progress = p }
 	fail := func(msg string, err error) {
 		LogError("API", msg, err)
 		cancel()
-		a.sseAgent.Emit(taskId, "failed", map[string]any{"error": msg})
+		ts.Failed = true
+		ts.Error = msg
 		ts.Done = true
 	}
+
+	// ── prompt assembly ───────────────────────────────────────────────────────
 
 	biomePrompt, ok1 := Prompts.PromptAnalyze[experiment.Biome]
 	stonePrompt, ok2 := Prompts.PromptStone[experiment.Stone][experiment.Biome]
@@ -612,17 +683,17 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		fail("Laboratory database error: missing prompts for biome or stone", nil)
 		return
 	}
-
 	prompt := fmt.Sprintf(biomePrompt, stonePrompt)
 
+	setProgress(P.Analyzed)
+	// ── build OpenAI request ──────────────────────────────────────────────────
+
 	requestBody := map[string]any{
-		"model":       "gpt-4o",
-		"max_tokens":  2048,
-		"temperature": 0.3,
-		"top_p":       1.0,
-		"response_format": map[string]any{
-			"type": "json_object",
-		},
+		"model":           "gpt-4o",
+		"max_tokens":      2048,
+		"temperature":     0.3,
+		"top_p":           1.0,
+		"response_format": map[string]any{"type": "json_object"},
 		"messages": []any{
 			map[string]any{
 				"role":    "system",
@@ -631,10 +702,7 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 			map[string]any{
 				"role": "user",
 				"content": []any{
-					map[string]any{
-						"type": "text",
-						"text": "Here's an image",
-					},
+					map[string]any{"type": "text", "text": "Here's an image"},
 					map[string]any{
 						"type": "image_url",
 						"image_url": map[string]any{
@@ -652,24 +720,15 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		return
 	}
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		OPENAI_COMPLETION_URL,
-		bytes.NewReader(bodyBytes),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, OPENAI_COMPLETION_URL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		fail("Internal error: cannot create request", err)
 		return
 	}
-
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.cfg.OpenAIToken)
 
-	client := &http.Client{
-		Timeout: 100 * time.Second,
-	}
-
+	client := &http.Client{Timeout: 100 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		fail("Laboratory connection lost: OpenAI unreachable", err)
@@ -682,7 +741,6 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		fail("Failed to read laboratory report", err)
 		return
 	}
-
 	if resp.StatusCode != http.StatusOK {
 		fail(fmt.Sprintf("OpenAI API refused: %d. Response: %s", resp.StatusCode, string(respBody)), nil)
 		return
@@ -695,21 +753,14 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 			} `json:"message"`
 		} `json:"choices"`
 	}
-
 	if err = json.Unmarshal(respBody, &rawResp); err != nil || len(rawResp.Choices) == 0 {
-		fmt.Printf("\nRaw Body: %s\n", string(respBody))
 		fail("Laboratory analyzer returned corrupted data", err)
 		return
 	}
 
 	content := rawResp.Choices[0].Message.Content
-
 	sanitizedJson, err := sanitizeJSON(content)
 	if err != nil {
-		fmt.Println("----------------- LLM RESPONSE DEBUG -----------------")
-		fmt.Printf("Raw Body: %v\n", string(respBody))
-		fmt.Printf("Raw Content: %q\n", content)
-		fmt.Printf("Sanitization Error: %v\n", err)
 		fail(fmt.Sprintf("Cannot parse analyze report. Raw result: %v", content), err)
 		return
 	}
@@ -719,52 +770,47 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 		fail("Failed to parse specimen data", err)
 		return
 	}
-
 	if maybeError, hasError := parsed["Error"]; hasError {
 		fail(fmt.Sprint(maybeError), nil)
 		return
 	}
 
+	setProgress(P.Analyzed)
 	analyzed := time.Now().UTC()
 	experiment.Specimen = sanitizedJson
 	experiment.Analyzed = &analyzed
-
 	if _, err := a.db.AnalyzeExperiment(context.Background(), experiment); err != nil {
 		fail("Database failed to record specimen", err)
 		return
 	}
 
 	nextTaskId := uuid.NewString()
-	tasks.Store(nextTaskId, &TaskStatus{Progress: 0, Done: false})
-
+	tasks.Store(nextTaskId, &TaskStatus{Progress: 50, Done: false})
 	go a.generateImage(nextTaskId, parsed, *experiment)
 
 	ts.Done = true
 	ts.Result = parsed
 	ts.NextTaskId = nextTaskId
-
-	a.sseAgent.Emit(taskId, "done", map[string]any{
-		"result":   parsed,
-		"nextTask": nextTaskId,
-	})
 }
 
 func (a *api) generateImage(taskId string, specimen map[string]any, experiment Experiment) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	ts := &TaskStatus{
-		Done: false,
-	}
+	ts := &TaskStatus{Done: false}
+	ts.SetStage(P.Analyzed, P.Generated, AVG_GENERATE_TIME)
 	tasks.Store(taskId, ts)
 
+	setProgress := func(p int) { ts.Progress = p }
 	fail := func(msg string, err error) {
 		LogError("API", msg, err)
 		cancel()
-		a.sseAgent.Emit(taskId, "failed", map[string]any{"error": msg})
+		ts.Failed = true
+		ts.Error = msg
 		ts.Done = true
 	}
 
+	// ── parse specimen ────────────────────────────────────────────────────────
 	renderDirective, ok := specimen["RENDER_DIRECTIVE"]
 	profile, ok2 := specimen["MONSTER_PROFILE"].(map[string]any)
 	if !ok || !ok2 {
@@ -776,22 +822,15 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		if value, ok := profile[key].(string); ok && value != "" {
 			return value
 		}
-
 		fallbacks := map[string]string{
-			"name":           "Unnamed Creature",
-			"species":        "Mysterious Species",
-			"lore":           "Its origins are lost to time",
-			"height": "50",
-			"weight": "7",
-			"movement_class": "Unknown Locomotion",
-			"behaviour":      "Behavior undocumented",
-			"personality":    "Enigmatic",
-			"abilities":      "Abilities yet to be discovered",
-			"habitat":        "Habitat unknown",
+			"name": "Unnamed Creature", "species": "Mysterious Species",
+			"lore": "Its origins are lost to time", "height": "50", "weight": "7",
+			"movement_class": "Unknown Locomotion", "behaviour": "Behavior undocumented",
+			"personality": "Enigmatic", "abilities": "Abilities yet to be discovered",
+			"habitat": "Habitat unknown",
 		}
-
-		if fallback, ok := fallbacks[key]; ok {
-			return fallback
+		if fb, ok := fallbacks[key]; ok {
+			return fb
 		}
 		return "Not specified"
 	}
@@ -810,6 +849,8 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 
 	prompt := fmt.Sprintf("%s.\n %s", renderDirective, Prompts.PromptGeneration[experiment.Biome])
 
+	// ── build OpenAI image request ────────────────────────────────────────────
+
 	requestBody := map[string]any{
 		"model":      "gpt-image-1.5",
 		"n":          1,
@@ -818,31 +859,21 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		"prompt":     prompt,
 		"moderation": "low",
 	}
-
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
 		fail("cannot marshal json", err)
 		return
 	}
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		OPENAI_GENERATION_URL,
-		bytes.NewReader(bodyBytes),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, OPENAI_GENERATION_URL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		fail("cannot create request", err)
 		return
 	}
-
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.cfg.OpenAIToken)
 
-	client := &http.Client{
-		Timeout: 60 * time.Second,
-	}
-
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		fail("cannot make external request", err)
@@ -861,7 +892,6 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 			B64JSON string `json:"b64_json"`
 		} `json:"data"`
 	}
-
 	if err := json.Unmarshal(respBody, &parsed); err != nil || len(parsed.Data) == 0 {
 		fail("invalid OpenAI image response", err)
 		return
@@ -870,9 +900,50 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	base64Image := parsed.Data[0].B64JSON
 	generated := time.Now().UTC()
 
-	imageCid, err := uploadImageToPinata(a.cfg.Pinata.PinataToken, base64Image, name)
+	setProgress(P.Generated)
+	ts.SetStage(P.Generated, P.Finished, AVG_UPLOAD_TIME)
+
+	imageBytes, err := base64.StdEncoding.DecodeString(base64Image)
 	if err != nil {
-		fail("cannot upload image to ipfs", err)
+		fail("cannot decode base64 image", err)
+		return
+	}
+	// тумб 400px
+	thumbBytes, err := ResizePNG(imageBytes, 400)
+	if err != nil {
+		fail("cannot resize thumb", err)
+		return
+	}
+
+	type pinataResult struct {
+		cid string
+		err error
+	}
+	pinataCh := make(chan pinataResult, 1)
+	go func() {
+		cid, err := uploadImageToPinata(a.cfg.Pinata.PinataToken, base64Image, name)
+		pinataCh <- pinataResult{cid, err}
+	}()
+
+	imageKey := fmt.Sprintf("monsters/%s/image.png", experiment.UUID)
+	thumbKey := fmt.Sprintf("monsters/%s/thumb.png", experiment.UUID)
+
+	if err := a.r2.Upload(ctx, imageKey, "image/png", imageBytes); err != nil {
+		fail("cannot upload image to r2", err)
+		return
+	}
+	if err := a.r2.Upload(ctx, thumbKey, "image/png", thumbBytes); err != nil {
+		fail("cannot upload thumb to r2", err)
+		return
+	}
+
+	experiment.ImageUrl = a.r2.URL(imageKey)
+	experiment.ThumbUrl = a.r2.URL(thumbKey)
+
+	// ждём Pinata
+	pr := <-pinataCh
+	if pr.err != nil {
+		fail("cannot upload image to ipfs", pr.err)
 		return
 	}
 
@@ -881,45 +952,24 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		fail("cannot select rarities", err)
 		return
 	}
-
 	experiment.Rarity = stats.PickRarity(StoneAmazonite)
 
 	metadataBody := map[string]any{
 		"name":                    name,
 		"symbol":                  "MON",
 		"description":             "d",
-		"image":                   fmt.Sprintf("ipfs://%s", imageCid),
-		"external_url":            "https://borflab.com/cards",
+		"image":                   fmt.Sprintf("ipfs://%s", pr.cid),
+		"external_url":            "https://borflab.com/library",
 		"seller_fee_basis_points": 0,
 		"attributes": []any{
-			map[string]string{
-				"trait_type": "Biome",
-				"value":      string(experiment.Biome),
-			},
-			map[string]string{
-				"trait_type": "Rarity",
-				"value":      string(experiment.Rarity),
-			},
-			map[string]string{
-				"trait_type": "Stone",
-				"value":      string(experiment.Stone),
-			},
+			map[string]string{"trait_type": "Biome", "value": string(experiment.Biome)},
+			map[string]string{"trait_type": "Rarity", "value": string(experiment.Rarity)},
+			map[string]string{"trait_type": "Stone", "value": string(experiment.Stone)},
 		},
 		"properties": map[string]any{
-			"category": "image",
-			"files": []map[string]any{
-				{
-					"uri":  fmt.Sprintf("ipfs://%s", imageCid),
-					"type": "image/png",
-				},
-			},
-			"creators": []map[string]any{
-				{
-					"address":  "dghfghgfh",
-					"share":    100,
-					"verified": true,
-				},
-			},
+			"category":       "image",
+			"files":          []map[string]any{{"uri": fmt.Sprintf("ipfs://%s", pr.cid), "type": "image/png"}},
+			"creators":       []map[string]any{{"address": "dghfghgfh", "share": 100, "verified": true}},
 			"species":        species,
 			"lore":           lore,
 			"weight":         weight,
@@ -944,8 +994,10 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		return
 	}
 
+	setProgress(P.Uploaded)
+
 	uploaded := time.Now().UTC()
-	experiment.ImageCID = imageCid
+	experiment.ImageCID = pr.cid
 	experiment.MetadataCID = metadataCid
 	experiment.Metadata = metadata
 	experiment.Generated = &generated
@@ -956,23 +1008,15 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		return
 	}
 
+	setProgress(P.Finished)
 	ts.Done = true
-	ts.Result = struct {
-		Image        string `json:"image"`
-		ExperimentId int    `json:"experimentId"`
-	}{
-		Image:        base64Image,
-		ExperimentId: experiment.Id,
-	}
-
-	a.sseAgent.Emit(taskId, "done", map[string]any{
+	ts.Result = map[string]any{
 		"image":        base64Image,
 		"experimentId": experiment.Id,
-	})
+	}
 }
 
 func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
-
 	ctx := r.Context()
 	experimentId := Param(r)
 
@@ -989,7 +1033,6 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 	}
 
 	var parsed map[string]any
-
 	if err := json.Unmarshal(experiment.Specimen, &parsed); err != nil {
 		a.InternalError(w, fmt.Errorf("cannot unmarshal specimen: %v", err))
 		return
@@ -1012,29 +1055,21 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 		a.InternalError(w, fmt.Errorf("invalid admin key"))
 		return
 	}
-	// 3. Admin verification
+
 	rpcCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	adminAccount, err := a.rpcClient.GetAccountInfoWithOpts(
-		rpcCtx,
-		cardMintAdminPda,
-		&rpc.GetAccountInfoOpts{
-			Commitment: rpc.CommitmentConfirmed,
-		},
-	)
+	adminAccount, err := a.rpcClient.GetAccountInfoWithOpts(rpcCtx, cardMintAdminPda,
+		&rpc.GetAccountInfoOpts{Commitment: rpc.CommitmentConfirmed})
 	if err != nil {
 		a.InternalError(w, fmt.Errorf("cannot get admin account: %v", err))
 		return
 	}
-
 	if adminAccount == nil || adminAccount.Value == nil || len(adminAccount.Value.Data.GetBinary()) < 32 {
 		a.InternalError(w, fmt.Errorf("cannot validate admin account: %v", err))
 		return
 	}
-
 	registeredAdmin := solana.PublicKeyFromBytes(adminAccount.GetBinary()[8:40])
-
 	if !registeredAdmin.Equals(adminPrivateKey.PublicKey()) {
 		a.InternalError(w, fmt.Errorf("unauthorized admin keypair"))
 		return
@@ -1043,28 +1078,15 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 	mint := solana.NewWallet()
 	mintPubKey := mint.PublicKey()
 	userNftPda, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("user_nft"), userPubKey.Bytes(), mintPubKey.Bytes()},
-		programId,
-	)
-
+		[][]byte{[]byte("user_nft"), userPubKey.Bytes(), mintPubKey.Bytes()}, programId)
 	metadata, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), mintPubKey.Bytes()},
-		tokenMetadataProgramId,
-	)
+		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), mintPubKey.Bytes()}, tokenMetadataProgramId)
 	masterEdition, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), mintPubKey.Bytes(), []byte("edition")},
-		tokenMetadataProgramId,
-	)
-
+		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), mintPubKey.Bytes(), []byte("edition")}, tokenMetadataProgramId)
 	collectionMetadata, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), cardCollectionPubKey.Bytes()},
-		tokenMetadataProgramId,
-	)
+		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), cardCollectionPubKey.Bytes()}, tokenMetadataProgramId)
 	collectionMasterEdition, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), cardCollectionPubKey.Bytes(), []byte("edition")},
-		tokenMetadataProgramId,
-	)
-
+		[][]byte{[]byte("metadata"), tokenMetadataProgramId.Bytes(), cardCollectionPubKey.Bytes(), []byte("edition")}, tokenMetadataProgramId)
 	borflabVaultPda, _, _ := solana.FindProgramAddress([][]byte{[]byte("borflab_vault")}, programId)
 	borflabVaultAta, _, _ := solana.FindAssociatedTokenAddress(borflabVaultPda, mintPubKey)
 
@@ -1074,49 +1096,39 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 		return
 	}
 
-	var mintCardIx solana.Instruction
-
 	cardTypePda, _, _ := solana.FindProgramAddress([][]byte{[]byte("spark_card_type")}, programId)
 	sparkCardStatePda, _, _ := solana.FindProgramAddress(
-		[][]byte{[]byte("spark_card_state"), mintPubKey.Bytes()},
-		programId,
-	)
+		[][]byte{[]byte("spark_card_state"), mintPubKey.Bytes()}, programId)
 
-	mintCardIx = solana.NewInstruction(
+	mintCardIx := solana.NewInstruction(
 		programId,
 		[]*solana.AccountMeta{
-			solana.NewAccountMeta(mintPubKey, true, false),                                 // 0. mint
-			solana.NewAccountMeta(userPubKey, true, false),                                 // 1. owner
-			solana.NewAccountMeta(borflabVaultPda, true, false),                            // 2. borflab_vault
-			solana.NewAccountMeta(borflabVaultAta, true, false),                            // 3. borflab_vault_ata
-			solana.NewAccountMeta(adminPrivateKey.PublicKey(), true, true),                 // 4. authority (signer)
-			solana.NewAccountMeta(cardMintAdminPda, false, false),                          // 5. card_mint_admin
-			solana.NewAccountMeta(cardTypePda, true, false),                                // 6. spark_card_type
-			solana.NewAccountMeta(sparkCardStatePda, true, false),                          // 7. spark_card_state
-			solana.NewAccountMeta(userNftPda, true, false),                                 // 8. user_nft
-			solana.NewAccountMeta(cardCollectionPubKey, false, false),                      // 9. collection_mint
-			solana.NewAccountMeta(collectionMetadata, true, false),                         // 10. collection_metadata
-			solana.NewAccountMeta(collectionMasterEdition, true, false),                    // 11. collection_master_edition
-			solana.NewAccountMeta(metadata, true, false),                                   // 12. metadata
-			solana.NewAccountMeta(masterEdition, true, false),                              // 13. master_edition
-			solana.NewAccountMeta(collectionAuthorityPda, true, false),                     // 14. collection_authority
-			solana.NewAccountMeta(solana.TokenProgramID, false, false),                     // 15. token_program
-			solana.NewAccountMeta(solana.SPLAssociatedTokenAccountProgramID, false, false), // 16. associated_token_program
-			solana.NewAccountMeta(solana.SystemProgramID, false, false),                    // 17. system_program
-			solana.NewAccountMeta(tokenMetadataProgramId, false, false),                    // 18. token_metadata_program
-			solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),                   // 19. rent
+			solana.NewAccountMeta(mintPubKey, true, false),
+			solana.NewAccountMeta(userPubKey, true, false),
+			solana.NewAccountMeta(borflabVaultPda, true, false),
+			solana.NewAccountMeta(borflabVaultAta, true, false),
+			solana.NewAccountMeta(adminPrivateKey.PublicKey(), true, true),
+			solana.NewAccountMeta(cardMintAdminPda, false, false),
+			solana.NewAccountMeta(cardTypePda, true, false),
+			solana.NewAccountMeta(sparkCardStatePda, true, false),
+			solana.NewAccountMeta(userNftPda, true, false),
+			solana.NewAccountMeta(cardCollectionPubKey, false, false),
+			solana.NewAccountMeta(collectionMetadata, true, false),
+			solana.NewAccountMeta(collectionMasterEdition, true, false),
+			solana.NewAccountMeta(metadata, true, false),
+			solana.NewAccountMeta(masterEdition, true, false),
+			solana.NewAccountMeta(collectionAuthorityPda, true, false),
+			solana.NewAccountMeta(solana.TokenProgramID, false, false),
+			solana.NewAccountMeta(solana.SPLAssociatedTokenAccountProgramID, false, false),
+			solana.NewAccountMeta(solana.SystemProgramID, false, false),
+			solana.NewAccountMeta(tokenMetadataProgramId, false, false),
+			solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),
 		},
 		encodeMintSparkCardInstanceData(uri, user_id, experiment_id),
 	)
 
 	createMintAccountIx := system.NewCreateAccountInstruction(
-		mintRent,
-		82,
-		solana.TokenProgramID,
-		adminPrivateKey.PublicKey(),
-		mintPubKey,
-	).Build()
-
+		mintRent, 82, solana.TokenProgramID, adminPrivateKey.PublicKey(), mintPubKey).Build()
 	computeBudgetIx := computebudget.NewSetComputeUnitLimitInstruction(400000).Build()
 
 	recent, err := a.rpcClient.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
@@ -1125,14 +1137,8 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 		return
 	}
 
-	instructions := []solana.Instruction{
-		computeBudgetIx,
-		createMintAccountIx,
-		mintCardIx,
-	}
-
 	tx, err := solana.NewTransaction(
-		instructions,
+		[]solana.Instruction{computeBudgetIx, createMintAccountIx, mintCardIx},
 		recent.Value.Blockhash,
 		solana.TransactionPayer(adminPrivateKey.PublicKey()),
 	)
@@ -1164,14 +1170,64 @@ func (a *api) PrepareMonsterMint(w *Responder, r *http.Request) {
 
 	LogInfo("API", fmt.Sprintf("Transaction sent: %s", sig.String()))
 
-	response := struct {
+	// Mark pending immediately so the first client poll doesn't get a 404.
+	expIdStr := strconv.Itoa(experiment.Id)
+	mintStatuses.Store(expIdStr, &MintStatus{Status: "pending", Signature: sig.String()})
+
+	// Track confirmation in the background; client polls /mint/{expId}/status.
+	go a.trackMintConfirmation(expIdStr, sig)
+
+	w.Send(struct {
 		Signature string `json:"signature"`
-	}{
-		Signature: sig.String(),
+	}{Signature: sig.String()})
+}
+
+func (a *api) trackMintConfirmation(experimentId string, sig solana.Signature) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			mintStatuses.Store(experimentId, &MintStatus{
+				Status: "failed",
+				Error:  "confirmation timeout",
+			})
+			return
+
+		case <-ticker.C:
+			statuses, err := a.rpcClient.GetSignatureStatuses(ctx, false, sig)
+			if err != nil || statuses == nil || len(statuses.Value) == 0 || statuses.Value[0] == nil {
+				// transient RPC hiccup – just wait for next tick
+				continue
+			}
+
+			result := statuses.Value[0]
+
+			if result.Err != nil {
+				mintStatuses.Store(experimentId, &MintStatus{
+					Status: "failed",
+					Error:  fmt.Sprintf("chain error: %v", result.Err),
+				})
+				return
+			}
+
+			confirmed := result.ConfirmationStatus == rpc.ConfirmationStatusConfirmed ||
+				result.ConfirmationStatus == rpc.ConfirmationStatusFinalized
+
+			if confirmed {
+				mintStatuses.Store(experimentId, &MintStatus{
+					Status:    "confirmed",
+					Signature: sig.String(),
+				})
+				return
+			}
+			// still processing (processed / nil) – next tick
+		}
 	}
-
-	w.Send(response)
-
 }
 
 func (a *api) PrepareMonsterSwap(w *Responder, r *http.Request) {
@@ -1447,61 +1503,6 @@ func (a *api) PrepareMonsterSwap(w *Responder, r *http.Request) {
 
 }
 
-func (a *api) SubscribeSSE(w http.ResponseWriter, r *http.Request) {
-	key := Param(r)
-
-	if key == "" {
-		http.Error(w, "key required", http.StatusBadRequest)
-		return
-	}
-
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	sub := a.sseAgent.Subscribe(key)
-	defer a.sseAgent.Unsubscribe(sub)
-
-	ctx := r.Context()
-
-	heartbeat := time.NewTicker(15 * time.Second)
-	defer heartbeat.Stop()
-
-	sendSSE := func(event string, payload any) {
-		data, err := json.Marshal(payload)
-		if err != nil {
-			data = []byte(`{"error":"failed to marshal data"}`)
-		}
-
-		if event != "" {
-			fmt.Fprintf(w, "event: %s\n", event)
-		}
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg := <-sub.conn:
-			sendSSE(msg.Event, msg.Data)
-
-		case <-heartbeat.C:
-			fmt.Fprintf(w, ": heartbeat\n\n")
-			flusher.Flush()
-		}
-	}
-}
-
 func encodeSwapCardInstructionData() []byte {
 	return []byte{143, 210, 95, 198, 96, 127, 195, 247}
 }
@@ -1677,4 +1678,15 @@ func uploadMetadataToPinata(pinataJWT string, metadata map[string]any) (string, 
 	}
 
 	return parsed.IpfsHash, nil
+}
+
+func pct(elapsedSeconds int) int {
+	v := int(float64(elapsedSeconds) / float64(totalPipelineTime) * 100)
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
 }

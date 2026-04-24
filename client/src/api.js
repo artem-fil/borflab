@@ -124,6 +124,18 @@ export default {
         });
     },
 
+    async getTaskStatus(taskId) {
+        return request(`/api/task/${taskId}`, {
+            timeout: 5000,
+        });
+    },
+
+    async getMintStatus(experimentId) {
+        return request(`/api/mint/${experimentId}`, {
+            timeout: 5000,
+        });
+    },
+
     async prepareMonsterMint(id, body) {
         return request(`/api/prepare-monster-mint/${id}`, {
             method: "POST",

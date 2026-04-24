@@ -30,7 +30,7 @@ type Biome string
 
 const (
 	BiomeAmazonia  Biome = "amazonia"
-	BiomeCoralux  Biome = "coralux"
+	BiomeCoralux   Biome = "coralux"
 	BiomePlushland Biome = "plushland"
 	BiomeCanopica  Biome = "canopica"
 )
@@ -76,18 +76,17 @@ type User struct {
 
 type Experiment struct {
 	Id     int
+	UUID   string
 	UserId string
 
 	InputMime   string
 	InputSize   int
 	InputWidth  int
 	InputHeight int
+	InputUrl    string
 
-	ProcessedMime   string
-	ProcessedSize   int
-	ProcessedWidth  int
-	ProcessedHeight int
-	ProcessedImage  []byte
+	ImageUrl string
+	ThumbUrl string
 
 	Specimen    json.RawMessage
 	ImageCID    string
@@ -166,6 +165,11 @@ type Monster struct {
 	MetadataUri string
 	ImageCid    string
 
+	// === images ===
+	InputUrl *string
+	ImageUrl *string
+	ThumbUrl *string
+
 	Minted  time.Time
 	Created time.Time
 }
@@ -200,10 +204,10 @@ type Purchase struct {
 }
 
 type SizeRange struct {
-    MinHeightCm int
-    MaxHeightCm int
-    MinWeightG  int
-    MaxWeightG  int
+	MinHeightCm int
+	MaxHeightCm int
+	MinWeightG  int
+	MaxWeightG  int
 }
 
 func (stats *RarityStats) PickRarity(stone StoneType) Rarity {

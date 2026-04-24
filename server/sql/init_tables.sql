@@ -75,8 +75,8 @@ create table if not exists monsters (
     experiment_id int not null references experiments(id),
     mint_address varchar(44) unique not null,
     owner_address varchar(44),
-    stone_mint_address varchar(44) not null,
-    card_state_address varchar(44) not null,
+    stone_mint_address varchar(44),
+    card_state_address varchar(44),
 
     name text not null,
     height int,

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"math"
+	"math/rand"
 	"sync"
+	"time"
 )
 
 type SSEMessage struct {
@@ -19,11 +22,52 @@ type SSEAgent struct {
 }
 
 type TaskStatus struct {
-	Progress   int    `json:"progress"`
-	Done       bool   `json:"done"`
-	Error      string `json:"error,omitempty"`
-	Result     any    `json:"result,omitempty"`
-	NextTaskId string `json:"nextTask,omitempty"`
+	Progress      int    `json:"progress"`
+	Done          bool   `json:"done"`
+	Failed        bool   `json:"failed"`
+	Error         string `json:"error,omitempty"`
+	Result        any    `json:"result,omitempty"`
+	StageStarted  time.Time
+	StageFrom     int
+	StageTo       int
+	StageDuration float64 // секунд
+	NextTaskId    string  `json:"nextTaskId,omitempty"`
+}
+
+func (ts *TaskStatus) SetStage(from, to int, durationSec float64) {
+	ts.StageFrom = from
+	ts.StageTo = to
+	ts.StageDuration = durationSec
+	ts.StageStarted = time.Now()
+}
+
+func (ts *TaskStatus) ComputeProgress() int {
+	if ts.Done {
+		return ts.StageTo
+	}
+
+	elapsed := time.Since(ts.StageStarted).Seconds()
+
+	from := float64(ts.StageFrom)
+	to := float64(ts.StageTo)
+	t := elapsed / ts.StageDuration
+
+	raw := from + (to-from)*t
+
+	capped := math.Min(raw, to-2)
+
+	// ±1% jitter
+	jitter := rand.Float64()
+
+	result := int(capped + jitter)
+
+	if result < ts.StageFrom {
+		return ts.StageFrom
+	}
+	if result >= ts.StageTo {
+		return ts.StageTo - 1
+	}
+	return result
 }
 
 type Task struct {

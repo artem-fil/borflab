@@ -160,7 +160,7 @@ export default function Library() {
                                             alt="card front"
                                         />
                                         <img
-                                            src={`https://serveproxy.com/?url=https://gateway.pinata.cloud/ipfs/${monster.ImageCid}`}
+                                            src={monster.ThumbUrl}
                                             className="absolute top-1/2 w-full -translate-y-1/2 left-0 object-cover z-10"
                                             alt="output"
                                         />

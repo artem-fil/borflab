@@ -37,10 +37,10 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) UpsertUser(ctx context.Context, u *User) (*User, bool, error) {
-    
-    row := db.Conn.QueryRowContext(
-    ctx,
-    `
+
+	row := db.Conn.QueryRowContext(
+		ctx,
+		`
 WITH new_user_data AS (
     SELECT 
         $1::text as p_id,
@@ -73,29 +73,29 @@ returning
     synced,
     (xmax = 0) as is_new
     `,
-    u.PrivyId,
-    nullable(u.Email),
-    pq.Array(u.Wallets),
-)
+		u.PrivyId,
+		nullable(u.Email),
+		pq.Array(u.Wallets),
+	)
 
-    var updated User
-    var isNew bool
-    var wallets pq.StringArray
+	var updated User
+	var isNew bool
+	var wallets pq.StringArray
 
-    if err := row.Scan(
-        &updated.PrivyId,
-        &updated.Email,
-        &wallets,
-        &updated.BorfId, 
-        &updated.Created,
-        &updated.Synced,
-        &isNew,
-    ); err != nil {
-        return nil, false, err
-    }
+	if err := row.Scan(
+		&updated.PrivyId,
+		&updated.Email,
+		&wallets,
+		&updated.BorfId,
+		&updated.Created,
+		&updated.Synced,
+		&isNew,
+	); err != nil {
+		return nil, false, err
+	}
 
-    updated.Wallets = []string(wallets)
-    return &updated, isNew, nil
+	updated.Wallets = []string(wallets)
+	return &updated, isNew, nil
 }
 
 func (db *DB) GetLastSignature(ctx context.Context) (string, error) {
@@ -346,7 +346,6 @@ func (db *DB) SelectMonsters(ctx context.Context, userId string, limit int, offs
 	if err != nil {
 		return monsters, 0, err
 	}
-
 	if total == 0 {
 		return monsters, 0, nil
 	}
@@ -357,323 +356,262 @@ func (db *DB) SelectMonsters(ctx context.Context, userId string, limit int, offs
 		ctx,
 		fmt.Sprintf(`
 select
-	id,
-	user_id,
-	experiment_id,
-	mint_address,
-	owner_address,
-	stone_mint_address,
-	card_state_address,
-	name,
-	height,
-	weight,
-	species,
-	lore,
-	movement_class,
-	behaviour,
-	personality,
-	abilities,
-	habitat,
-	biome,
-	rarity,
-	stone,
-	metadata_uri,
-	image_cid,
-	serial_number,
-	generation,
-	status,
-	signature,
-	slot,
-	minted,
-	created
+	id, user_id, experiment_id,
+	mint_address, owner_address, stone_mint_address, card_state_address,
+	name, height, weight, species, lore,
+	movement_class, behaviour, personality, abilities, habitat,
+	biome, rarity, stone,
+	metadata_uri, image_cid,
+	input_url, image_url, thumb_url,
+	serial_number, generation, status,
+	signature, slot, minted, created
 from monsters where user_id = $1 order by %s limit $2 offset $3;`, sortOrder),
 		userId, limit, offset,
 	)
 	if err != nil {
 		return monsters, 0, err
-
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var monster Monster
+		var m Monster
 		err = rows.Scan(
-			&monster.Id,
-			&monster.UserId,
-			&monster.ExperimentId,
-			&monster.MintAddress,
-			&monster.OwnerAddress,
-			&monster.StoneMintAddress,
-			&monster.CardStateAddress,
-			&monster.Name,
-			&monster.Height,
-			&monster.Weight,
-			&monster.Species,
-			&monster.Lore,
-			&monster.MovementClass,
-			&monster.Behaviour,
-			&monster.Personality,
-			&monster.Abilities,
-			&monster.Habitat,
-			&monster.Biome,
-			&monster.Rarity,
-			&monster.Stone,
-			&monster.MetadataUri,
-			&monster.ImageCid,
-			&monster.SerialNumber,
-			&monster.Generation,
-			&monster.Status,
-			&monster.Signature,
-			&monster.Slot,
-			&monster.Minted,
-			&monster.Created,
+			&m.Id, &m.UserId, &m.ExperimentId,
+			&m.MintAddress, &m.OwnerAddress, &m.StoneMintAddress, &m.CardStateAddress,
+			&m.Name, &m.Height, &m.Weight, &m.Species, &m.Lore,
+			&m.MovementClass, &m.Behaviour, &m.Personality, &m.Abilities, &m.Habitat,
+			&m.Biome, &m.Rarity, &m.Stone,
+			&m.MetadataUri, &m.ImageCid,
+			&m.InputUrl, &m.ImageUrl, &m.ThumbUrl,
+			&m.SerialNumber, &m.Generation, &m.Status,
+			&m.Signature, &m.Slot, &m.Minted, &m.Created,
 		)
 		if err != nil {
 			return monsters, 0, err
 		}
-		monsters = append(monsters, monster)
+		monsters = append(monsters, m)
 	}
-	return monsters, total, err
+	return monsters, total, rows.Err()
 }
 
 func (db *DB) SelectMonster(ctx context.Context, mintAddress string, userId string) (Monster, error) {
-	var monster Monster
-	err := db.Conn.QueryRowContext(
-		ctx,
-		`
+	var m Monster
+	err := db.Conn.QueryRowContext(ctx, `
 select
-	id,
-	user_id,
-	experiment_id,
-	mint_address,
-	owner_address,
-	stone_mint_address,
-	card_state_address,
-	name,
-	height,
-	weight,
-	species,
-	lore,
-	movement_class,
-	behaviour,
-	personality,
-	abilities,
-	habitat,
-	biome,
-	rarity,
-	stone,
-	metadata_uri,
-	image_cid,
-	serial_number,
-	generation,
-	status,
-	signature,
-	slot,
-	minted,
-	created
+	id, user_id, experiment_id,
+	mint_address, owner_address, stone_mint_address, card_state_address,
+	name, height, weight, species, lore,
+	movement_class, behaviour, personality, abilities, habitat,
+	biome, rarity, stone,
+	metadata_uri, image_cid,
+	input_url, image_url, thumb_url,
+	serial_number, generation, status,
+	signature, slot, minted, created
 from monsters where mint_address = $1 and user_id = $2;`, mintAddress, userId).Scan(
-		&monster.Id,
-		&monster.UserId,
-		&monster.ExperimentId,
-		&monster.MintAddress,
-		&monster.OwnerAddress,
-		&monster.StoneMintAddress,
-		&monster.CardStateAddress,
-		&monster.Name,
-		&monster.Height,
-		&monster.Weight,
-		&monster.Species,
-		&monster.Lore,
-		&monster.MovementClass,
-		&monster.Behaviour,
-		&monster.Personality,
-		&monster.Abilities,
-		&monster.Habitat,
-		&monster.Biome,
-		&monster.Rarity,
-		&monster.Stone,
-		&monster.MetadataUri,
-		&monster.ImageCid,
-		&monster.SerialNumber,
-		&monster.Generation,
-		&monster.Status,
-		&monster.Signature,
-		&monster.Slot,
-		&monster.Minted,
-		&monster.Created,
+		&m.Id, &m.UserId, &m.ExperimentId,
+		&m.MintAddress, &m.OwnerAddress, &m.StoneMintAddress, &m.CardStateAddress,
+		&m.Name, &m.Height, &m.Weight, &m.Species, &m.Lore,
+		&m.MovementClass, &m.Behaviour, &m.Personality, &m.Abilities, &m.Habitat,
+		&m.Biome, &m.Rarity, &m.Stone,
+		&m.MetadataUri, &m.ImageCid,
+		&m.InputUrl, &m.ImageUrl, &m.ThumbUrl,
+		&m.SerialNumber, &m.Generation, &m.Status,
+		&m.Signature, &m.Slot, &m.Minted, &m.Created,
 	)
-	if err != nil {
-		return monster, err
-	}
-	return monster, err
+	return m, err
 }
 
-func (db *DB) SelectExperiment(ctx context.Context, id string) (*Experiment, error) {
-	row := db.Conn.QueryRowContext(
-		ctx,
-		`
-        select 
-            id,
-            user_id,
-            input_mime,
-            input_size,
-            input_width,
-            input_height,
-            processed_mime,
-            processed_size,
-            processed_width,
-            processed_height,
-			specimen,
-			image_cid,
-			metadata_cid,
-			metadata,
-            stone,
-            biome,
-            rarity,
-            created
-        from experiments
-        where id = $1;
-        `,
-		id,
-	)
+func (db *DB) SelectSwapPool(ctx context.Context, limit int) ([]Monster, error) {
+	monsters := make([]Monster, 0)
 
-	experiment := &Experiment{}
-
-	if err := row.Scan(
-		&experiment.Id,
-		&experiment.UserId,
-		&experiment.InputMime,
-		&experiment.InputSize,
-		&experiment.InputWidth,
-		&experiment.InputHeight,
-		&experiment.ProcessedMime,
-		&experiment.ProcessedSize,
-		&experiment.ProcessedWidth,
-		&experiment.ProcessedHeight,
-		&experiment.Specimen,
-		&experiment.ImageCID,
-		&experiment.MetadataCID,
-		&experiment.Metadata,
-		&experiment.Stone,
-		&experiment.Biome,
-		&experiment.Rarity,
-		&experiment.Created,
-	); err != nil {
-		return nil, err
+	rows, err := db.Conn.QueryContext(ctx, `
+SELECT
+	id, COALESCE(user_id, 'SWAP_POOL'), experiment_id,
+	mint_address, owner_address, stone_mint_address, card_state_address,
+	name, height, weight, species, lore,
+	movement_class, behaviour, personality, abilities, habitat,
+	biome, rarity, stone,
+	metadata_uri, image_cid,
+	input_url, image_url, thumb_url,
+	serial_number, generation, status,
+	signature, slot, minted, created
+FROM monsters
+WHERE status = 'in_pool' AND user_id IS NULL
+ORDER BY RANDOM()
+LIMIT $1;`, limit)
+	if err != nil {
+		return monsters, err
 	}
+	defer rows.Close()
 
-	return experiment, nil
+	for rows.Next() {
+		var m Monster
+		err = rows.Scan(
+			&m.Id, &m.UserId, &m.ExperimentId,
+			&m.MintAddress, &m.OwnerAddress, &m.StoneMintAddress, &m.CardStateAddress,
+			&m.Name, &m.Height, &m.Weight, &m.Species, &m.Lore,
+			&m.MovementClass, &m.Behaviour, &m.Personality, &m.Abilities, &m.Habitat,
+			&m.Biome, &m.Rarity, &m.Stone,
+			&m.MetadataUri, &m.ImageCid,
+			&m.InputUrl, &m.ImageUrl, &m.ThumbUrl,
+			&m.SerialNumber, &m.Generation, &m.Status,
+			&m.Signature, &m.Slot, &m.Minted, &m.Created,
+		)
+		if err != nil {
+			return monsters, err
+		}
+		monsters = append(monsters, m)
+	}
+	return monsters, rows.Err()
 }
 
 func (db *DB) InsertExperiment(ctx context.Context, e *Experiment) (*Experiment, error) {
-	row := db.Conn.QueryRowContext(
-		ctx,
-		`
+	row := db.Conn.QueryRowContext(ctx, `
 insert into experiments (
+    uuid,
     user_id,
     input_mime,
     input_size,
     input_width,
     input_height,
-    processed_mime,
-    processed_size,
-    processed_width,
-    processed_height,
-    processed_image,
-	stone,
-	biome
-) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-returning 
+    input_url,
+    stone,
+    biome
+) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+returning
     id,
+    uuid,
     user_id,
     input_mime,
     input_size,
     input_width,
     input_height,
-    processed_mime,
-    processed_size,
-    processed_width,
-    processed_height,
-	stone,
-	biome,
+    input_url,
+    stone,
+    biome,
     created
-        `,
+    `,
+		e.UUID,
 		e.UserId,
 		e.InputMime,
 		e.InputSize,
 		e.InputWidth,
 		e.InputHeight,
-		e.ProcessedMime,
-		e.ProcessedSize,
-		e.ProcessedWidth,
-		e.ProcessedHeight,
-		e.ProcessedImage,
+		e.InputUrl,
 		e.Stone,
 		e.Biome,
 	)
 
-	var inserted Experiment
+	var i Experiment
 	if err := row.Scan(
-		&inserted.Id,
-		&inserted.UserId,
-		&inserted.InputMime,
-		&inserted.InputSize,
-		&inserted.InputWidth,
-		&inserted.InputHeight,
-		&inserted.ProcessedMime,
-		&inserted.ProcessedSize,
-		&inserted.ProcessedWidth,
-		&inserted.ProcessedHeight,
-		&inserted.Stone,
-		&inserted.Biome,
-		&inserted.Created,
+		&i.Id,
+		&i.UUID,
+		&i.UserId,
+		&i.InputMime,
+		&i.InputSize,
+		&i.InputWidth,
+		&i.InputHeight,
+		&i.InputUrl,
+		&i.Stone,
+		&i.Biome,
+		&i.Created,
 	); err != nil {
 		return nil, err
 	}
+	return &i, nil
+}
 
-	return &inserted, nil
+func (db *DB) SelectExperiment(ctx context.Context, id string) (*Experiment, error) {
+	row := db.Conn.QueryRowContext(ctx, `
+select
+    id,
+    uuid,
+    user_id,
+    input_mime,
+    input_size,
+    input_width,
+    input_height,
+    input_url,
+    image_url,
+    thumb_url,
+    specimen,
+    image_cid,
+    metadata_cid,
+    metadata,
+    stone,
+    biome,
+    rarity,
+    created,
+    analyzed,
+    generated,
+    uploaded,
+    minted
+from experiments
+where id = $1
+    `, id)
+
+	e := &Experiment{}
+	if err := row.Scan(
+		&e.Id,
+		&e.UUID,
+		&e.UserId,
+		&e.InputMime,
+		&e.InputSize,
+		&e.InputWidth,
+		&e.InputHeight,
+		&e.InputUrl,
+		&e.ImageUrl,
+		&e.ThumbUrl,
+		&e.Specimen,
+		&e.ImageCID,
+		&e.MetadataCID,
+		&e.Metadata,
+		&e.Stone,
+		&e.Biome,
+		&e.Rarity,
+		&e.Created,
+		&e.Analyzed,
+		&e.Generated,
+		&e.Uploaded,
+		&e.Minted,
+	); err != nil {
+		return nil, err
+	}
+	return e, nil
 }
 
 func (db *DB) AnalyzeExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
-	result, err := db.Conn.ExecContext(
-		ctx,
-		`
+	return db.Conn.ExecContext(ctx, `
 update experiments set
     specimen = $1,
     analyzed = $2
 where id = $3
-        `,
-		e.Specimen,
-		e.Analyzed,
-		e.Id,
-	)
-
-	return result, err
+    `, e.Specimen, e.Analyzed, e.Id)
 }
 
 func (db *DB) FinishExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
-	result, err := db.Conn.ExecContext(
-		ctx,
-		`
+	return db.Conn.ExecContext(ctx, `
 update experiments set
-		rarity = $1,
-		image_cid = $2,
-		metadata_cid = $3,
-		metadata = $4,
-		generated = $5,
-		uploaded = $6
-where id = $7
-        `,
+    rarity       = $1,
+    image_cid    = $2,
+    metadata_cid = $3,
+    metadata     = $4,
+    image_url    = $5,
+    thumb_url    = $6,
+    generated    = $7,
+    uploaded     = $8
+where id = $9
+    `,
 		e.Rarity,
 		e.ImageCID,
 		e.MetadataCID,
 		e.Metadata,
+		e.ImageUrl,
+		e.ThumbUrl,
 		e.Generated,
 		e.Uploaded,
 		e.Id,
 	)
-
-	return result, err
 }
 
 func (db *DB) SelectRarities(ctx context.Context) (RarityStats, error) {
@@ -936,67 +874,96 @@ where id = (
 }
 
 func (db *DB) InsertMonsterTx(ctx context.Context, tx *sql.Tx, monster *Monster) error {
-	result, err := tx.ExecContext(
-		ctx,
-		`
+	result, err := tx.ExecContext(ctx, `
 insert into monsters (
-	user_id,
+    user_id,
 	experiment_id,
-	mint_address,
+    mint_address,
 	owner_address,
 	stone_mint_address,
 	card_state_address,
-	name,
-	height,
-	weight,
-	species,
+    name, height,
+	weight, species,
 	lore,
-	movement_class,
+    movement_class,
 	behaviour,
 	personality,
 	abilities,
 	habitat,
-	biome,
+    biome,
 	rarity,
 	stone,
-	metadata_uri,
+    metadata_uri,
 	image_cid,
-	serial_number,
+    input_url,
+	image_url,
+	thumb_url,
+    serial_number,
 	generation,
 	status,
 	signature,
 	slot,
 	minted
-) values ((select privy_id from users where $1 = any(wallets)), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
-on conflict (signature) do nothing
-		`,
-		monster.OwnerAddress,
-		monster.ExperimentId,
-		monster.MintAddress,
-		monster.OwnerAddress,
-		monster.StoneMintAddress,
-		monster.CardStateAddress,
-		monster.Name,
-		monster.Height,
-		monster.Weight,
-		monster.Species,
-		monster.Lore,
-		monster.MovementClass,
-		monster.Behaviour,
-		monster.Personality,
-		monster.Abilities,
-		monster.Habitat,
-		monster.Biome,
-		monster.Rarity,
-		monster.Stone,
-		monster.MetadataUri,
-		monster.ImageCid,
-		monster.SerialNumber,
-		monster.Generation,
-		monster.Status,
-		monster.Signature,
-		monster.Slot,
-		monster.Minted,
+) values (
+    (select privy_id from users where $1 = any(wallets)),
+    $2,
+	$3,
+	$4,
+	$5,
+	$6,
+	$7,
+	$8,
+	$9,
+	$10,
+	$11,
+    $12,
+	$13,
+	$14,
+	$15,
+	$16,
+	$17,
+	$18,
+	$19,
+	$20,
+	$21,
+    (select input_url from experiments where id = $2),
+    (select image_url from experiments where id = $2),
+    (select thumb_url from experiments where id = $2),
+    $22,
+	$23,
+	$24,
+	$25,
+	$26,
+	$27
+) on conflict (signature) do nothing
+    `,
+		monster.OwnerAddress,     // $1
+		monster.ExperimentId,     // $2
+		monster.MintAddress,      // $3
+		monster.OwnerAddress,     // $4
+		monster.StoneMintAddress, // $5
+		monster.CardStateAddress, // $6
+		monster.Name,             // $7
+		monster.Height,           // $8
+		monster.Weight,           // $9
+		monster.Species,          // $10
+		monster.Lore,             // $11
+		monster.MovementClass,    // $12
+		monster.Behaviour,        // $13
+		monster.Personality,      // $14
+		monster.Abilities,        // $15
+		monster.Habitat,          // $16
+		monster.Biome,            // $17
+		monster.Rarity,           // $18
+		monster.Stone,            // $19
+		monster.MetadataUri,      // $20
+		monster.ImageCid,         // $21
+		monster.SerialNumber,     // $22
+		monster.Generation,       // $23
+		monster.Status,           // $24
+		monster.Signature,        // $25
+		monster.Slot,             // $26
+		monster.Minted,           // $27
 	)
 	if err != nil {
 		return err
@@ -1005,100 +972,10 @@ on conflict (signature) do nothing
 	if err != nil {
 		return err
 	}
-
 	if rowsAffected == 0 {
-		return fmt.Errorf("no rows insert for monster: %s", monster.MintAddress)
+		return fmt.Errorf("no rows inserted for monster: %s", monster.MintAddress)
 	}
-	return err
-}
-
-func (db *DB) SelectSwapPool(ctx context.Context, limit int) ([]Monster, error) {
-	monsters := make([]Monster, 0)
-
-	rows, err := db.Conn.QueryContext(
-		ctx,
-		`
-SELECT
-	id,
-	COALESCE(user_id, 'SWAP_POOL'),
-	experiment_id,
-	mint_address,
-	owner_address,
-	stone_mint_address,
-	card_state_address,
-	name,
-	height,
-	weight,
-	species,
-	lore,
-	movement_class,
-	behaviour,
-	personality,
-	abilities,
-	habitat,
-	biome,
-	rarity,
-	stone,
-	metadata_uri,
-	image_cid,
-	serial_number,
-	generation,
-	status,
-	signature,
-	slot,
-	minted,
-	created
-FROM monsters
-WHERE status = 'in_pool'
-  AND user_id IS NULL
-ORDER BY RANDOM()
-LIMIT $1;`,
-		limit,
-	)
-	if err != nil {
-		return monsters, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var monster Monster
-		err = rows.Scan(
-			&monster.Id,
-			&monster.UserId,
-			&monster.ExperimentId,
-			&monster.MintAddress,
-			&monster.OwnerAddress,
-			&monster.StoneMintAddress,
-			&monster.CardStateAddress,
-			&monster.Name,
-			&monster.Height,
-			&monster.Weight,
-			&monster.Species,
-			&monster.Lore,
-			&monster.MovementClass,
-			&monster.Behaviour,
-			&monster.Personality,
-			&monster.Abilities,
-			&monster.Habitat,
-			&monster.Biome,
-			&monster.Rarity,
-			&monster.Stone,
-			&monster.MetadataUri,
-			&monster.ImageCid,
-			&monster.SerialNumber,
-			&monster.Generation,
-			&monster.Status,
-			&monster.Signature,
-			&monster.Slot,
-			&monster.Minted,
-			&monster.Created,
-		)
-		if err != nil {
-			return monsters, err
-		}
-		monsters = append(monsters, monster)
-	}
-	return monsters, rows.Err()
+	return nil
 }
 
 func (db *DB) SwapMonsterTx(

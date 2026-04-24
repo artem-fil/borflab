@@ -53,7 +53,8 @@ func main() {
 	solanaAgentCtx, solanaAgentCancel := context.WithCancel(context.Background())
 	go solanaAgent.Start(solanaAgentCtx)
 
-	api := NewApi(cfg, db, telegram, rpcClient, sseAgent)
+	r2 := NewR2Client(cfg.R2)
+	api := NewApi(cfg, db, r2, telegram, rpcClient, sseAgent)
 	mux := NewRouter(mddlwr, api)
 
 	server := &http.Server{

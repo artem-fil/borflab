@@ -42,8 +42,8 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	router.Handle("POST", "/api/create-payment", mddlwr.RequireAuth(api.CreatePayment))
 	router.Handle("PUT", "/api/purchases/:id", mddlwr.RequireAuth(api.OpenPurchase))
 
-	// SSE
-	router.Handle("GET", "/sse/subscribe/:id", api.SubscribeSSE)
+	router.Handle("GET", "/api/task/:id", mddlwr.RequireAuth(api.GetTaskStatus))
+	router.Handle("GET", "/api/mint/:id", mddlwr.RequireAuth(api.GetMintStatus))
 
 	// stripe webhook
 	router.Handle("POST", "/api/stripe-webhook", api.StripeWebhook)

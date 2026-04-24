@@ -36,12 +36,22 @@ type PinataConfig struct {
 	PinataToken  string
 }
 
+type R2Config struct {
+	R2Id     string
+	R2Token  string
+	R2Key    string
+	R2Url    string
+	R2Secret string
+	R2Bucket string
+}
+
 type Config struct {
 	DB               DBConfig
 	Telegram         TelegramConfig
 	Privy            PrivyConfig
 	Solana           SolanaConfig
 	Pinata           PinataConfig
+	R2               R2Config
 	OpenAIToken      string
 	StripePrivateKey string
 	StripeSecret     string
@@ -79,6 +89,30 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	privyAppID, err := requireEnv("PRIVY_APP_ID")
+	if err != nil {
+		return nil, err
+	}
+	r2Id, err := requireEnv("R2_ID")
+	if err != nil {
+		return nil, err
+	}
+	r2Token, err := requireEnv("R2_TOKEN")
+	if err != nil {
+		return nil, err
+	}
+	r2Key, err := requireEnv("R2_KEY")
+	if err != nil {
+		return nil, err
+	}
+	r2Url, err := requireEnv("R2_URL")
+	if err != nil {
+		return nil, err
+	}
+	r2Secret, err := requireEnv("R2_SECRET")
+	if err != nil {
+		return nil, err
+	}
+	r2Bucket, err := requireEnv("R2_BUCKET")
 	if err != nil {
 		return nil, err
 	}
@@ -161,6 +195,14 @@ func LoadConfig() (*Config, error) {
 			PinataKey:    pinataKey,
 			PinataSecret: pinataSecret,
 			PinataToken:  pinataToken,
+		},
+		R2: R2Config{
+			R2Id:     r2Id,
+			R2Url:    r2Url,
+			R2Token:  r2Token,
+			R2Key:    r2Key,
+			R2Secret: r2Secret,
+			R2Bucket: r2Bucket,
 		},
 		OpenAIToken:      openAIToken,
 		StripePrivateKey: stripePrivateKey,
