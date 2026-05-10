@@ -22,50 +22,83 @@ type SSEAgent struct {
 }
 
 type TaskStatus struct {
-	Progress      int    `json:"progress"`
-	Done          bool   `json:"done"`
-	Failed        bool   `json:"failed"`
-	Error         string `json:"error,omitempty"`
-	Result        any    `json:"result,omitempty"`
-	StageStarted  time.Time
-	StageFrom     int
-	StageTo       int
-	StageDuration float64 // секунд
-	NextTaskId    string  `json:"nextTaskId,omitempty"`
+	mu sync.RWMutex
+
+	progress   int
+	done       bool
+	failed     bool
+	errMsg     string
+	result     any
+	nextTaskId string
+
+	stageStarted  time.Time
+	stageFrom     int
+	stageTo       int
+	stageDuration float64
 }
 
-func (ts *TaskStatus) SetStage(from, to int, durationSec float64) {
-	ts.StageFrom = from
-	ts.StageTo = to
-	ts.StageDuration = durationSec
-	ts.StageStarted = time.Now()
+func (ts *TaskStatus) SetStage(from, to int, duration float64) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.stageFrom = from
+	ts.stageTo = to
+	ts.stageDuration = duration
+	ts.stageStarted = time.Now()
 }
 
-func (ts *TaskStatus) ComputeProgress() int {
-	if ts.Done {
-		return ts.StageTo
+func (ts *TaskStatus) SetProgress(p int) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.progress = p
+}
+
+func (ts *TaskStatus) Finish(result any, nextTaskId string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.result = result
+	ts.nextTaskId = nextTaskId
+	ts.done = true
+}
+
+func (ts *TaskStatus) Fail(msg string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.failed = true
+	ts.errMsg = msg
+	ts.done = true
+}
+
+func (ts *TaskStatus) Snapshot() map[string]any {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return map[string]any{
+		"progress":   ts.computeProgressLocked(),
+		"done":       ts.done,
+		"failed":     ts.failed,
+		"error":      ts.errMsg,
+		"result":     ts.result,
+		"nextTaskId": ts.nextTaskId,
 	}
+}
 
-	elapsed := time.Since(ts.StageStarted).Seconds()
-
-	from := float64(ts.StageFrom)
-	to := float64(ts.StageTo)
-	t := elapsed / ts.StageDuration
-
+// вызывать только под RLock
+func (ts *TaskStatus) computeProgressLocked() int {
+	if ts.done {
+		return ts.stageTo
+	}
+	elapsed := time.Since(ts.stageStarted).Seconds()
+	from := float64(ts.stageFrom)
+	to := float64(ts.stageTo)
+	t := elapsed / ts.stageDuration
 	raw := from + (to-from)*t
-
 	capped := math.Min(raw, to-2)
-
-	// ±1% jitter
 	jitter := rand.Float64()
-
 	result := int(capped + jitter)
-
-	if result < ts.StageFrom {
-		return ts.StageFrom
+	if result < ts.stageFrom {
+		return ts.stageFrom
 	}
-	if result >= ts.StageTo {
-		return ts.StageTo - 1
+	if result >= ts.stageTo {
+		return ts.stageTo - 1
 	}
 	return result
 }

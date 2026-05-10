@@ -1,4 +1,4 @@
-import { Link, useParams, useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import cardfrontImg from "@images/card-front.png";
 import swapomatImg from "@images/swapomat.png";
@@ -35,8 +35,9 @@ export default function Swapomat() {
         pages: 0,
     });
 
-    const mintSSERef = useRef(null);
-    const mintTimeoutRef = useRef(null);
+    const pollTimerRef = useRef(null);
+    const visibilityHandlerRef = useRef(null);
+    const pollCancelledRef = useRef(false);
     const slotIntervalRef = useRef(null);
     const slotIdxRef = useRef(0);
 
@@ -97,6 +98,64 @@ export default function Swapomat() {
         if (status === "idle") setSlotMonster(monster);
     }, [monster, status]);
 
+    function stopPolling() {
+        pollCancelledRef.current = true;
+        clearTimeout(pollTimerRef.current);
+        if (visibilityHandlerRef.current) {
+            document.removeEventListener("visibilitychange", visibilityHandlerRef.current);
+            visibilityHandlerRef.current = null;
+        }
+    }
+
+    function pollSwapStatus(signature, { totalTimeoutMs = 90_000 } = {}) {
+        return new Promise((resolve, reject) => {
+            pollCancelledRef.current = false;
+            const startTime = Date.now();
+            const INTERVAL_MS = 2000;
+            let networkErrors = 0;
+
+            const doPoll = async () => {
+                if (pollCancelledRef.current) return;
+
+                if (Date.now() - startTime > totalTimeoutMs) {
+                    reject(new Error("Swap timeout"));
+                    return;
+                }
+
+                try {
+                    const status = await api.getSwapStatus(signature);
+                    networkErrors = 0;
+
+                    if (status.status === "confirmed") {
+                        resolve(status.mintAddress); // бэк возвращает mintAddress полученного монстра
+                        return;
+                    }
+                    if (status.status === "failed") {
+                        reject(new Error(status.error || "Swap failed"));
+                        return;
+                    }
+
+                    pollTimerRef.current = setTimeout(doPoll, INTERVAL_MS);
+                } catch (err) {
+                    networkErrors++;
+                    const delay = Math.min(INTERVAL_MS * Math.pow(2, networkErrors - 1), 8000);
+                    pollTimerRef.current = setTimeout(doPoll, delay);
+                }
+            };
+
+            const onVisibilityChange = () => {
+                if (document.visibilityState === "visible") {
+                    clearTimeout(pollTimerRef.current);
+                    doPoll();
+                }
+            };
+            document.addEventListener("visibilitychange", onVisibilityChange);
+            visibilityHandlerRef.current = onVisibilityChange;
+
+            doPoll();
+        });
+    }
+
     // ─── Анимация слота
     function startSlotSpin() {
         if (!swapPool.length) return;
@@ -139,80 +198,34 @@ export default function Swapomat() {
         setStatus("swapping");
         setGainedMonster(null);
         startSlotSpin();
-        /*
-        setTimeout(() => {
-            // Берем случайного монстра из пула как результат
-            const randomResult = swapPool[Math.floor(Math.random() * swapPool.length)];
-
-            if (!randomResult) {
-                setStatus("error");
-                cleanupMint();
-                return;
-            }
-
-            setGainedMonster(randomResult);
-            slowDownSlot(randomResult); // Запускаем замедление до этой карты
-
-            // Финализируем статус после того как анимация замедления (~1.8сек) закончится
-            setTimeout(() => {
-                setStatus("success");
-                cleanupMint();
-            }, 1850);
-        }, 10000); // "Транзакция" идет 3 секунды
-        */
-
-        const solanaWallet = activeWallet;
-
-        mintTimeoutRef.current = setTimeout(() => {
-            mintSSERef.current?.close();
-            cleanupMint();
-            setStatus("error");
-        }, 60000);
-
-        mintSSERef.current = api.subscribeSSE(solanaWallet.address, {
-            onEvent: async (event, data) => {
-                if (event === "confirmed") {
-                    const { Monster } = await api.getMonster(data);
-                    setGainedMonster(Monster);
-                    slowDownSlot(Monster); // замедлить и остановиться на результате
-                    cleanupMint();
-                    // status → 'success' ставим после того как слот остановится
-                    setTimeout(() => setStatus("success"), 1100);
-                }
-                if (event === "failed") {
-                    cleanupMint();
-                    setStatus("error");
-                }
-            },
-            onError: () => console.warn("SSE temporarily disconnected, retrying…"),
-        });
 
         try {
-            await api.swapMonster({
-                userPubKey: solanaWallet.address,
+            const { signature } = await api.swapMonster({
+                userPubKey: activeWallet.address,
                 monsterPubKey: monster.MintAddress,
             });
+
+            const mintAddress = await pollSwapStatus(signature);
+            stopPolling();
+
+            const { Monster } = await api.getMonster(mintAddress);
+            setGainedMonster(Monster);
+            slowDownSlot(Monster);
+            setTimeout(() => setStatus("success"), 1100);
         } catch (err) {
-            console.error("Transaction failed:", err);
-            cleanupMint();
+            console.error("Swap failed:", err);
+            stopPolling();
+            clearInterval(slotIntervalRef.current);
             setStatus("error");
         }
     }
 
-    function cleanupMint() {
-        clearTimeout(mintTimeoutRef.current);
-        clearInterval(slotIntervalRef.current);
-        mintSSERef.current?.close();
-        mintSSERef.current = null;
-        mintTimeoutRef.current = null;
-    }
-
-    function handleDismiss() {
-        setStatus("idle");
-        setGainedMonster(null);
-        setMonster(null);
-        setSlotMonster(null);
-    }
+    useEffect(() => {
+        return () => {
+            stopPolling();
+            clearInterval(slotIntervalRef.current);
+        };
+    }, []);
 
     const handlePageChange = (newPage) => setPagination((p) => ({ ...p, page: newPage }));
 

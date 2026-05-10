@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../api";
 import store from "../store";
+import { clearLog, createPollSession, flushLog, log, prepareSpecimen } from "../utils";
 
 import { BIOMES, STONES } from "../config.js";
 
@@ -56,24 +57,27 @@ export default function Step2({ current, specimen, stone, biome }) {
     const [bubble, setBubble] = useState(null);
 
     const monitorRef = useRef(null);
-    const queueRef = useRef(Promise.resolve());
-    const audioMint = useRef(new Audio(mintSound));
-    const audioLab = useRef(new Audio(labSound));
-    const audioPrinter = useRef(new Audio(printerSound));
+    const audioMint = useRef(null);
+    const audioLab = useRef(null);
+    const audioPrinter = useRef(null);
+
     const hasStarted = useRef(false);
     const backCardRef = useRef(null);
     const frontCardRef = useRef(null);
 
-    const phraseIndexRef = useRef(0); // оставляем, но используем иначе
+    const twRef = useRef({
+        pending: [],
+        typed: "",
+        current: "",
+        charIdx: 0,
+        resolve: null,
+    });
 
-    // Polling state
-    const pollTimerRef = useRef(null); // current setTimeout handle
-    const visibilityHandlerRef = useRef(null); // for cleanup
-    const pollCancelledRef = useRef(false); // stop flag
+    const phraseIndexRef = useRef(0);
+
+    const pollSessionRef = useRef(null);
 
     const { wallets } = useWallets();
-
-    // ─── setup ────────────────────────────────────────────────────────────────
 
     useEffect(() => {
         if (wallets?.length > 0) {
@@ -110,6 +114,37 @@ export default function Step2({ current, specimen, stone, biome }) {
     }, [mintSuccess]);
 
     useEffect(() => {
+        const id = setInterval(() => {
+            const tw = twRef.current;
+
+            // ещё печатаем текущую строку
+            if (tw.charIdx < tw.current.length) {
+                tw.charIdx++;
+                setDisplayed(tw.typed + tw.current.slice(0, tw.charIdx));
+                return;
+            }
+
+            // текущая строка закончилась
+            if (tw.current.length > 0) {
+                tw.typed += tw.current;
+                tw.current = "";
+                tw.charIdx = 0;
+                tw.resolve?.();
+                tw.resolve = null;
+            }
+
+            // берём следующую из очереди
+            if (tw.pending.length > 0) {
+                const { text, resolve } = tw.pending.shift();
+                tw.current = text + "\n";
+                tw.resolve = resolve;
+            }
+        }, 20);
+
+        return () => clearInterval(id);
+    }, []);
+
+    useEffect(() => {
         if (monitorRef.current) {
             monitorRef.current.scrollTop = monitorRef.current.scrollHeight;
         }
@@ -129,19 +164,23 @@ export default function Step2({ current, specimen, stone, biome }) {
         backCardRef.current.style.transform = `translateY(${translateY}%)`;
     }, [progress, phase]);
 
-    // ─── audio ────────────────────────────────────────────────────────────────
-
+    function getAudio(ref, src) {
+        if (!ref.current) {
+            ref.current = new Audio(src);
+        }
+        return ref.current;
+    }
     function stopAllAudio() {
         [audioLab, audioPrinter, audioMint].forEach((r) => {
+            if (!r.current) return;
             r.current.pause();
-            r.current.currentTime = 0;
+            r.current.src = ""; // освобождает декодированный буфер
+            r.current = null;
         });
     }
 
     function maybeAdvancePhrase(progress) {
         if (phraseIndexRef.current >= progressMessages.length) return;
-
-        // каждая фраза занимает равный кусок прогресса
         const step = 100 / progressMessages.length;
         const expectedIndex = Math.floor(progress / step);
 
@@ -150,154 +189,68 @@ export default function Step2({ current, specimen, stone, biome }) {
             phraseIndexRef.current++;
         }
     }
-    function pollTask(taskId, { onProgress, totalTimeoutMs = 180_000 } = {}) {
-        return new Promise((resolve, reject) => {
-            pollCancelledRef.current = false;
-            const startTime = Date.now();
-            const BASE_MS = 1000;
-            const MAX_MS = 8000;
-            let networkErrors = 0;
-
-            const doPoll = async () => {
-                if (pollCancelledRef.current) return;
-
-                if (Date.now() - startTime > totalTimeoutMs) {
-                    reject(new Error("Task timeout"));
-                    return;
-                }
-
-                try {
-                    const status = await api.getTaskStatus(taskId);
-                    networkErrors = 0; // reset backoff on any successful HTTP response
-
-                    if (status.progress != null) {
-                        setProgress((prev) => Math.max(prev, status.progress));
-                        maybeAdvancePhrase(status.progress);
-                    }
-
-                    if (status.failed) {
-                        reject(new Error(status.error || "Task failed"));
-                        return;
-                    }
-
-                    if (status.done) {
-                        resolve({ result: status.result, nextTaskId: status.nextTaskId });
-                        return;
-                    }
-                    pollTimerRef.current = setTimeout(doPoll, BASE_MS);
-                } catch (err) {
-                    networkErrors++;
-                    const delay = Math.min(BASE_MS * Math.pow(2, networkErrors - 1), MAX_MS);
-                    pollTimerRef.current = setTimeout(doPoll, delay);
-                }
-            };
-
-            // When the user returns from another app / unlocks the phone,
-            // fire immediately rather than waiting for the current timer.
-            const onVisibilityChange = () => {
-                if (document.visibilityState === "visible") {
-                    clearTimeout(pollTimerRef.current);
-                    doPoll();
-                }
-            };
-            document.addEventListener("visibilitychange", onVisibilityChange);
-            visibilityHandlerRef.current = onVisibilityChange;
-
-            doPoll();
-        });
-    }
-
-    function pollMintStatus(expId, { totalTimeoutMs = 90_000 } = {}) {
-        return new Promise((resolve, reject) => {
-            pollCancelledRef.current = false;
-            const startTime = Date.now();
-            const INTERVAL_MS = 2000;
-            let networkErrors = 0;
-
-            const doPoll = async () => {
-                if (pollCancelledRef.current) return;
-
-                if (Date.now() - startTime > totalTimeoutMs) {
-                    reject(new Error("Mint timeout"));
-                    return;
-                }
-
-                try {
-                    const status = await api.getMintStatus(expId);
-                    networkErrors = 0;
-
-                    if (status.status === "confirmed") {
-                        resolve();
-                        return;
-                    }
-                    if (status.status === "failed") {
-                        reject(new Error(status.error || "Mint failed"));
-                        return;
-                    }
-
-                    pollTimerRef.current = setTimeout(doPoll, INTERVAL_MS);
-                } catch (err) {
-                    networkErrors++;
-                    const delay = Math.min(INTERVAL_MS * Math.pow(2, networkErrors - 1), 8000);
-                    pollTimerRef.current = setTimeout(doPoll, delay);
-                }
-            };
-
-            const onVisibilityChange = () => {
-                if (document.visibilityState === "visible") {
-                    clearTimeout(pollTimerRef.current);
-                    doPoll();
-                }
-            };
-            document.addEventListener("visibilitychange", onVisibilityChange);
-            visibilityHandlerRef.current = onVisibilityChange;
-
-            doPoll();
-        });
-    }
-
-    function stopPolling() {
-        pollCancelledRef.current = true;
-        clearTimeout(pollTimerRef.current);
-        if (visibilityHandlerRef.current) {
-            document.removeEventListener("visibilitychange", visibilityHandlerRef.current);
-            visibilityHandlerRef.current = null;
-        }
-    }
-
-    // ─── workflow ─────────────────────────────────────────────────────────────
 
     async function runWorkflow() {
-        audioLab.current.volume = 0.5;
-        audioLab.current.play();
+        clearLog();
+        log("workflow:start", { biome, stone: stone.Type });
+
+        getAudio(audioLab, labSound).volume = 0.5;
+        getAudio(audioLab, labSound)
+            .play()
+            .catch(() => {});
 
         try {
+            log("specimen:prepare");
+            const prepared = await prepareSpecimen(specimen);
+
             const formData = new FormData();
-            formData.append("file", specimen, "specimen.jpg");
+            formData.append("file", prepared, "specimen.jpg");
             formData.append("biome", biome);
             formData.append("stone", stone.Type);
 
+            // ── analyze ───────────────────────────────────────────────────────────
+            log("analyze:start");
             const { Id } = await api.analyze(formData);
+            log("analyze:taskCreated", { taskId: Id });
 
-            // ── analyze ───────────────────────────────────────────────────────
-            const { result, nextTaskId } = await pollTask(Id);
+            const session1 = createPollSession();
+            pollSessionRef.current = session1;
+
+            const { result, nextTaskId } = await session1.pollTask(Id, {
+                onProgress: (p) => {
+                    setProgress((prev) => {
+                        if (p <= prev) return prev;
+                        maybeAdvancePhrase(p);
+                        return p;
+                    });
+                },
+            });
 
             setAnalyzeResult(result);
             await appendTypedLine("Analysis complete.");
             await appendTypedLine("Starting transmutation...");
 
             setPhase("GENERATING");
-            audioLab.current.pause();
-            audioPrinter.current.loop = true;
-            audioPrinter.current.volume = 0.5;
-            audioPrinter.current.play();
+            getAudio(audioLab, labSound).pause();
+            getAudio(audioPrinter, printerSound).loop = true;
+            getAudio(audioPrinter, printerSound).volume = 0.5;
+            getAudio(audioPrinter, printerSound)
+                .play()
+                .catch(() => {});
 
-            stopPolling(); // detach old visibility listener before next poll
+            // ── generate ──────────────────────────────────────────────────────────
+            log("generate:start", { taskId: nextTaskId });
+            const session2 = createPollSession();
+            pollSessionRef.current = session2;
 
-            // ── generate ──────────────────────────────────────────────────────
-            const { result: genResult } = await pollTask(nextTaskId);
+            const { result: genResult } = await session2.pollTask(nextTaskId, {
+                onProgress: (p) => {
+                    setProgress((prev) => Math.max(prev, p));
+                    maybeAdvancePhrase(p);
+                },
+            });
 
-            stopPolling();
+            pollSessionRef.current = null;
             setProgress(100);
             await appendTypedLine("💶 Initializing uplink ✅");
 
@@ -305,23 +258,27 @@ export default function Step2({ current, specimen, stone, biome }) {
             setImage(imgData);
             setExperimentId(expId);
 
+            log("workflow:generationDone", { expId });
             await triggerAutoMint(expId);
         } catch (err) {
-            stopPolling();
+            pollSessionRef.current?.cancel();
+            pollSessionRef.current = null;
             stopAllAudio();
+            log("workflow:error", { msg: err.message }, "error");
+            flushLog(`Workflow error: ${err.message}`);
             appendTypedLine(`❌ ERROR: ${err.message || "Unknown error"}`);
         }
     }
 
-    // ─── mint ─────────────────────────────────────────────────────────────────
-
     async function triggerAutoMint(expId) {
         setPhase("MINTING");
-        audioPrinter.current.pause();
-        audioPrinter.current.currentTime = 0;
-        audioMint.current.loop = true;
-        audioMint.current.volume = 0.3;
-        audioMint.current.play();
+        getAudio(audioPrinter, printerSound).pause();
+        getAudio(audioPrinter, printerSound).currentTime = 0;
+        getAudio(audioMint, mintSound).loop = true;
+        getAudio(audioMint, mintSound).volume = 0.3;
+        getAudio(audioMint, mintSound)
+            .play()
+            .catch(() => {});
 
         await handleMintAction(expId);
     }
@@ -331,32 +288,36 @@ export default function Step2({ current, specimen, stone, biome }) {
         setIsMinting(true);
 
         try {
-            // This call builds + sends the Solana tx server-side and returns fast.
-            // The server then tracks confirmation in a goroutine.
-            await api.prepareMonsterMint(expId, {
+            log("mint:start", { expId });
+            await api.mintMonster(expId, {
                 userPubKey: activeWallet.address,
                 stone: stone.Type,
             });
 
-            // Poll the server for on-chain confirmation instead of a second SSE.
-            await pollMintStatus(expId);
+            const mintSession = createPollSession();
+            pollSessionRef.current = mintSession;
+            await mintSession.pollMintStatus(expId);
 
-            stopPolling();
+            pollSessionRef.current = null;
+            log("mint:confirmed", { expId });
+            flushLog(`Workflow success: ${expId}`); // шлём в TG даже при успехе — для тайминг-статистики
+
             setMintSuccess(true);
             setIsMinting(false);
             setPhase("READY");
             setDisplayed((prev) => prev + "SPIRAL INDEX REGISTERED ✅\n");
             showFrontCard();
         } catch (err) {
-            stopPolling();
+            pollSessionRef.current?.cancel();
+            pollSessionRef.current = null;
             stopAllAudio();
             setIsMinting(false);
             setMintError(true);
+            log("mint:error", { expId, msg: err.message }, "error");
+            flushLog(`Mint error: ${err.message}`);
             setDisplayed((prev) => prev + `❌ ${err.message}\n`);
         }
     }
-
-    // ─── card reveal ──────────────────────────────────────────────────────────
 
     function showFrontCard() {
         stopAllAudio();
@@ -374,21 +335,12 @@ export default function Step2({ current, specimen, stone, biome }) {
         }
     }
 
-    // ─── typed output ─────────────────────────────────────────────────────────
-
-    async function appendTypedLine(line) {
-        if (!line) return;
-        queueRef.current = queueRef.current.then(async () => {
-            for (let i = 0; i < line.length; i++) {
-                setDisplayed((prev) => prev + line[i]);
-                await new Promise((r) => setTimeout(r, 20));
-            }
-            setDisplayed((prev) => prev + "\n");
+    function appendTypedLine(line) {
+        if (!line) return Promise.resolve();
+        return new Promise((resolve) => {
+            twRef.current.pending.push({ text: line, resolve });
         });
-        return queueRef.current;
     }
-
-    // ─── render ───────────────────────────────────────────────────────────────
 
     const { bg, text, border, icon } = BIOMES[biome] || {};
     const borfId = store.getBorfId();
@@ -588,7 +540,7 @@ export default function Step2({ current, specimen, stone, biome }) {
                                                 </div>
                                             )}
                                             <img
-                                                src={`data:image/png;base64,${image}`}
+                                                src={image}
                                                 className="max-h-full max-w-full w-auto h-auto object-contain mr-auto ml-auto z-10"
                                                 style={{
                                                     animation: mintSuccess ? "escape 3.5s infinite" : "",
@@ -648,8 +600,19 @@ export default function Step2({ current, specimen, stone, biome }) {
                     style={{ top: "42.5%", left: "88.7%", width: "3%" }}
                 />
 
+                <div
+                    className={`absolute z-10`}
+                    id="overlay"
+                    style={{ top: "90%", left: "10%", width: "40%", height: "8%" }}
+                />
                 {/* bg image */}
-                <img src={transmutatorImg} alt="analyzer" className="w-full h-auto object-contain" />
+                <img
+                    src={transmutatorImg}
+                    alt="analyzer"
+                    loading="eager"
+                    decoding="sync"
+                    className="w-full h-auto object-contain"
+                />
             </div>
 
             <style>{`

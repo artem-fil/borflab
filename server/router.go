@@ -37,14 +37,16 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	router.Handle("GET", "/api/products", mddlwr.RequireAuth(api.GetProducts))
 	router.Handle("POST", "/api/users/sync", mddlwr.RequireAuth(api.SyncUser))
 	router.Handle("POST", "/api/analyze", mddlwr.RequireAuth(api.AnalyzeSpecimen))
-	router.Handle("POST", "/api/prepare-monster-mint/:id", mddlwr.RequireAuth(api.PrepareMonsterMint))
-	router.Handle("POST", "/api/prepare-monster-swap", mddlwr.RequireAuth(api.PrepareMonsterSwap))
+	router.Handle("POST", "/api/monsters/:id", mddlwr.RequireAuth(api.MintMonster))
+	router.Handle("POST", "/api/prepare-monster-swap", mddlwr.RequireAuth(api.SwapMonster))
 	router.Handle("POST", "/api/create-payment", mddlwr.RequireAuth(api.CreatePayment))
 	router.Handle("PUT", "/api/purchases/:id", mddlwr.RequireAuth(api.OpenPurchase))
 
 	router.Handle("GET", "/api/task/:id", mddlwr.RequireAuth(api.GetTaskStatus))
 	router.Handle("GET", "/api/mint/:id", mddlwr.RequireAuth(api.GetMintStatus))
+	router.Handle("GET", "/api/swap/:id", mddlwr.RequireAuth(api.GetSwapStatus))
 
+	router.Handle("POST", "/api/debug", mddlwr.RequireAuth(api.DebugLog))
 	// stripe webhook
 	router.Handle("POST", "/api/stripe-webhook", api.StripeWebhook)
 

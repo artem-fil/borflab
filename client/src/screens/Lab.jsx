@@ -1,3 +1,4 @@
+import DebugOverlay from "@components/DebugOverlay";
 import Step1 from "@components/Step1";
 import Step2 from "@components/Step2";
 import { useState } from "react";
@@ -14,6 +15,7 @@ export default function Lab() {
 
     return (
         <div className="flex-grow flex flex-col items-center overflow-hidden h-full py-4">
+            <DebugOverlay />
             <div
                 className="flex transition-transform duration-500 ease-in-out w-full h-full"
                 style={{

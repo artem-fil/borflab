@@ -33,16 +33,20 @@ async function request(endpoint, options = {}) {
     }
 
     try {
-        const res = await fetch(url.toString(), {
-            method,
-            headers: {
-                ...(body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-                ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                ...headers,
-            },
-            ...(body ? { body: body instanceof FormData ? body : JSON.stringify(body) } : {}),
-            signal,
-        });
+        const res = await Promise.race([
+            fetch(url.toString(), {
+                method,
+                cache: method === "GET" ? "no-store" : "default",
+                headers: {
+                    ...(body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    ...headers,
+                },
+                ...(body ? { body: body instanceof FormData ? body : JSON.stringify(body) } : {}),
+                signal,
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), timeout)),
+        ]);
 
         if (!res.ok) {
             if (res.status === 401) {
@@ -54,7 +58,9 @@ async function request(endpoint, options = {}) {
             const data = await res.json().catch(() => ({}));
             const msg = data.error || data.message || res.statusText;
 
-            throw new Error(`API Error ${res.status}: ${msg}`);
+            const err = new Error(`API Error ${res.status}: ${msg}`);
+            if (res.status === 404) err.notFound = true;
+            throw err;
         }
 
         const contentType = res.headers.get("content-type");
@@ -121,25 +127,33 @@ export default {
         return request("/api/analyze", {
             method: "POST",
             body: formData,
+            timeout: 40_000,
         });
     },
 
     async getTaskStatus(taskId) {
         return request(`/api/task/${taskId}`, {
-            timeout: 5000,
+            timeout: 10000,
         });
     },
 
     async getMintStatus(experimentId) {
         return request(`/api/mint/${experimentId}`, {
+            timeout: 10000,
+        });
+    },
+
+    async getSwapStatus(signature) {
+        return request(`/api/swap/${signature}`, {
             timeout: 5000,
         });
     },
 
-    async prepareMonsterMint(id, body) {
-        return request(`/api/prepare-monster-mint/${id}`, {
+    async mintMonster(id, body) {
+        return request(`/api/monsters/${id}`, {
             method: "POST",
             body,
+            timeout: 40_000, // несколько Solana RPC вызовов последовательно
         });
     },
 
@@ -175,6 +189,14 @@ export default {
     async openPurchase(purchaseId) {
         return request(`/api/purchases/${purchaseId}`, {
             method: "PUT",
+        });
+    },
+
+    async debugLog(payload) {
+        return request("/api/debug", {
+            method: "POST",
+            body: payload,
+            timeout: 8_000,
         });
     },
 

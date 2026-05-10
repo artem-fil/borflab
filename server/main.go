@@ -58,8 +58,11 @@ func main() {
 	mux := NewRouter(mddlwr, api)
 
 	server := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: mddlwr.Wrap(mux),
+		Addr:         ":" + cfg.Port,
+		Handler:      mddlwr.Wrap(mux),
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  90 * time.Second,
 	}
 
 	go func() {

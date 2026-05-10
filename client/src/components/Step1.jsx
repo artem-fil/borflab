@@ -9,8 +9,9 @@ import api from "../api";
 import { PRODUCTS, STONES } from "../config.js";
 
 export default function Step1({ next, setSpecimen, stone, setStone, biome, setBiome }) {
+    const audioRef = useRef(null);
+    const alarmRef = useRef(null);
     const fileInputRef = useRef(null);
-    const typingRef = useRef(false);
     const [preview, setPreview] = useState(null);
     const [displayed, setDisplayed] = useState("");
     const [showStoneDialog, setShowStoneDialog] = useState(false);
@@ -18,24 +19,67 @@ export default function Step1({ next, setSpecimen, stone, setStone, biome, setBi
     const [availableStones, setAvailableStones] = useState(null);
     const [purchases, setAvailablePurchases] = useState([]);
     const [loading, setLoading] = useState(true);
-    const audioRef = useRef(new Audio(clickSound));
-    const alarmRef = useRef(new Audio(alarmSound));
-    audioRef.current.volume = 0.5;
-    alarmRef.current.volume = 0.5;
+    const twRef = useRef({
+        pending: [],
+        typed: "",
+        current: "",
+        charIdx: 0,
+        resolve: null,
+    });
 
-    async function appendTypedLine(line = "") {
-        if (!line) return;
+    useEffect(() => {
+        const id = setInterval(() => {
+            const tw = twRef.current;
 
-        typingRef.current = true;
+            if (tw.charIdx < tw.current.length) {
+                tw.charIdx++;
+                setDisplayed(tw.typed + tw.current.slice(0, tw.charIdx));
+                return;
+            }
 
-        for (let i = 0; i < line.length; i++) {
-            setDisplayed((prev) => prev + line[i]);
-            await new Promise((r) => setTimeout(r, 30));
-        }
+            if (tw.current.length > 0) {
+                tw.typed += tw.current;
+                tw.current = "";
+                tw.charIdx = 0;
+                tw.resolve?.();
+                tw.resolve = null;
+            }
 
-        setDisplayed((prev) => prev + "\n");
-        typingRef.current = false;
+            if (tw.pending.length > 0) {
+                const { text, resolve } = tw.pending.shift();
+                tw.current = text + "\n";
+                tw.resolve = resolve;
+            }
+        }, 20);
+
+        return () => clearInterval(id);
+    }, []);
+
+    function appendTypedLine(line) {
+        if (!line) return Promise.resolve();
+        return new Promise((resolve) => {
+            twRef.current.pending.push({ text: line, resolve });
+        });
     }
+
+    function getAudio(ref, src, volume = 0.5) {
+        if (!ref.current) {
+            ref.current = new Audio(src);
+            ref.current.volume = volume;
+        }
+        return ref.current;
+    }
+
+    useEffect(() => {
+        return () => {
+            [audioRef, alarmRef].forEach((r) => {
+                if (!r.current) return;
+                r.current.pause();
+                r.current.src = "";
+                r.current = null;
+            });
+        };
+    }, []);
 
     useEffect(() => {
         loadStonesData();
@@ -57,15 +101,15 @@ export default function Step1({ next, setSpecimen, stone, setStone, biome, setBi
         }
     }
 
-    const handleStoneSelect = async ({ Type, SparkCount }) => {
+    const handleStoneSelect = ({ Type, SparkCount }) => {
         if (SparkCount > 0) {
-            alarmRef.current.play();
+            getAudio(alarmRef, alarmSound).play();
             setStone({ Type, SparkCount });
             setShowStoneDialog(false);
         }
 
         if (!preview) {
-            await appendTypedLine(`${Type} selected.`);
+            appendTypedLine(`${Type} selected.`);
         }
     };
 
@@ -88,67 +132,57 @@ export default function Step1({ next, setSpecimen, stone, setStone, biome, setBi
         const file = e.target.files?.[0];
         if (!file) return;
 
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-            const img = new Image();
-            img.onload = async () => {
-                let blob;
-
-                const needResize =
-                    file.size / 1024 / 1024 > MAX_FILE_SIZE_MB || Math.max(img.width, img.height) > MAX_DIMENSION;
-
-                if (needResize) {
-                    let scale = 1;
-                    if (img.width > img.height) {
-                        scale = MAX_DIMENSION / img.width;
-                    } else {
-                        scale = MAX_DIMENSION / img.height;
-                    }
-
+        let bitmap;
+        try {
+            bitmap = await createImageBitmap(file);
+        } catch {
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+                const img = new Image();
+                img.onload = async () => {
                     const canvas = document.createElement("canvas");
+                    const scale = Math.min(1, MAX_DIMENSION / Math.max(img.width, img.height));
                     canvas.width = Math.round(img.width * scale);
                     canvas.height = Math.round(img.height * scale);
-                    const ctx = canvas.getContext("2d");
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-                    blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.8));
-                } else {
-                    blob = await toBlob(reader.result);
-                }
-
-                const previewUrl = URL.createObjectURL(blob);
-                setPreview(previewUrl);
-                setSpecimen(blob);
+                    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+                    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.8));
+                    setPreview(URL.createObjectURL(blob));
+                    setSpecimen(blob);
+                };
+                img.src = reader.result;
             };
-            img.src = reader.result;
-        };
+            reader.readAsDataURL(file);
+            appendTypedLine("Specimen uploaded.");
+            if (stone) {
+                appendTypedLine("Ready for analysis.");
+                appendTypedLine("Status: waiting for approval…");
+            }
+            return;
+        }
 
-        reader.readAsDataURL(file);
-        await appendTypedLine("Specimen uploaded.");
+        const { width, height } = bitmap;
+        const scale = Math.min(1, MAX_DIMENSION / Math.max(width, height));
+        const w = Math.round(width * scale);
+        const h = Math.round(height * scale);
+
+        const canvas = new OffscreenCanvas(w, h);
+        canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
+        bitmap.close();
+
+        const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.8 });
+
+        setPreview((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return URL.createObjectURL(blob);
+        });
+        setSpecimen(blob);
+
+        appendTypedLine("Specimen uploaded.");
         if (stone) {
-            await appendTypedLine("Ready for analysis.");
-            await appendTypedLine("Status: waiting for approval…");
+            appendTypedLine("Ready for analysis.");
+            appendTypedLine("Status: waiting for approval…");
         }
     };
-
-    function toBlob(fileOrDataUrl) {
-        return new Promise((resolve) => {
-            if (fileOrDataUrl instanceof Blob) {
-                resolve(fileOrDataUrl);
-            } else {
-                const img = new Image();
-                img.onload = () => {
-                    const canvas = document.createElement("canvas");
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext("2d");
-                    ctx.drawImage(img, 0, 0);
-                    canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.8);
-                };
-                img.src = fileOrDataUrl;
-            }
-        });
-    }
 
     const isNextEnabled = preview && stone && biome;
 
@@ -337,7 +371,7 @@ ${isNextEnabled ? "" : " cursor-not-allowed backdrop-grayscale"}`}
                 <button
                     type="button"
                     onClick={() => {
-                        audioRef.current.play();
+                        getAudio(audioRef, clickSound).play();
                         setBiome("amazonia");
                     }}
                     aria-pressed={biome === "amazonia"}
@@ -353,7 +387,7 @@ ${biome === "amazonia" ? "text-green-200" : ""}`}
                 <button
                     type="button"
                     onClick={() => {
-                        audioRef.current.play();
+                        getAudio(audioRef, clickSound).play();
                         setBiome("plushland");
                     }}
                     aria-pressed={biome === "plushland"}
@@ -368,7 +402,7 @@ ${biome === "plushland" ? "text-purple-200" : ""}`}
                 <button
                     type="button"
                     onClick={() => {
-                        audioRef.current.play();
+                        getAudio(audioRef, clickSound).play();
                         setBiome("coralux");
                     }}
                     aria-pressed={biome === "coralux"}
