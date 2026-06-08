@@ -10,20 +10,20 @@ import (
 
 var seasonLimits = map[Rarity]int{
 	RarityCommon:    420000,
-	RarityRare:      210000,
-	RarityEpic:      109200,
-	RarityMythic:    67200,
-	RarityLegendary: 33600,
+	RarityRare:      420000,
+	RarityEpic:      352800,
+	RarityMythic:    285600,
+	RarityLegendary: 201600,
 }
 
 var stoneProbabilities = map[StoneType][5]int{
-	StoneQuartz:    {50, 25, 13, 8, 4},
-	StoneAmazonite: {45, 27, 14, 9, 5},
-	StoneAgate:     {43, 26, 15, 10, 6},
-	StoneRuby:      {40, 25, 16, 11, 8},
-	StoneSapphire:  {35, 24, 18, 12, 11},
-	StoneTopaz:     {32, 22, 19, 13, 14},
-	StoneJade:      {30, 20, 20, 14, 16},
+	StoneQuartz:    {32, 27, 21, 13, 7},
+	StoneAmazonite: {29, 27, 22, 14, 8},
+	StoneAgate:     {27, 26, 22, 15, 10},
+	StoneRuby:      {24, 25, 22, 17, 12},
+	StoneSapphire:  {21, 24, 22, 18, 15},
+	StoneTopaz:     {18, 23, 21, 20, 18},
+	StoneJade:      {15, 22, 20, 22, 21},
 }
 
 type Biome string
@@ -198,7 +198,7 @@ type Purchase struct {
 	Product  string
 	Status   string
 	Provider string
-	Payload  json.RawMessage `json:"-"`
+	Payload  json.RawMessage
 	Created  time.Time
 	Opened   *time.Time
 }
@@ -293,13 +293,13 @@ func GeneratePackPayload(totalSparks int) map[string]int {
 		Type   StoneType
 		Weight int
 	}{
-		{StoneQuartz, 100},
-		{StoneAmazonite, 60},
-		{StoneAgate, 30},
-		{StoneRuby, 15},
-		{StoneSapphire, 8},
-		{StoneTopaz, 4},
-		{StoneJade, 1},
+		{StoneQuartz, 22},
+		{StoneAmazonite, 18},
+		{StoneRuby, 16},
+		{StoneAgate, 14},
+		{StoneSapphire, 12},
+		{StoneTopaz, 10},
+		{StoneJade, 8},
 	}
 
 	result := make(map[string]int)

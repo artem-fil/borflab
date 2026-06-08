@@ -106,11 +106,11 @@ export const STONES = {
 };
 
 export const RARITIES = {
-    common: "text-white",
-    rare: "text-blue-500",
-    epic: "text-purple-500",
-    mythic: "text-yellow-500",
-    legendary: "text-red-500",
+    common: "#e2e8f0",
+    rare: "#2dd4bf",
+    epic: "#a855f7",
+    mythic: "#facc15",
+    legendary: "#22c55e",
 };
 
 export const BIOMES = {

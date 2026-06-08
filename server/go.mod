@@ -9,7 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
-	github.com/stripe/stripe-go/v81 v81.4.0
+	github.com/stripe/stripe-go/v85 v85.1.0
 	golang.org/x/image v0.32.0
 )
 

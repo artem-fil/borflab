@@ -46,6 +46,8 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	router.Handle("GET", "/api/mint/:id", mddlwr.RequireAuth(api.GetMintStatus))
 	router.Handle("GET", "/api/swap/:id", mddlwr.RequireAuth(api.GetSwapStatus))
 
+	router.Handle("GET", "/sse/subscribe/:id", api.SubscribeSSE)
+
 	router.Handle("POST", "/api/debug", mddlwr.RequireAuth(api.DebugLog))
 	// stripe webhook
 	router.Handle("POST", "/api/stripe-webhook", api.StripeWebhook)

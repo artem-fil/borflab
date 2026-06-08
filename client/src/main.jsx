@@ -7,6 +7,22 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App.jsx";
 import "./index.css";
 
+import cardbackImg from "@images/card-back.png";
+import cardfrontImg from "@images/card-front.png";
+import watermarkImg from "@images/watermark.png";
+import { BIOMES, STONES } from "./config.js";
+
+[
+    cardbackImg,
+    cardfrontImg,
+    watermarkImg,
+    ...Object.values(STONES).map((s) => s.image),
+    ...Object.values(BIOMES).map((b) => b.icon),
+].forEach((src) => {
+    const img = new Image();
+    img.src = src;
+});
+
 const appId = "cmggax81g00zgh20b0z7052t6";
 
 const solanaConnectors = toSolanaWalletConnectors({ shouldAutoConnect: true });

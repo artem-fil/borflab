@@ -777,31 +777,24 @@ func (db *DB) InsertPurchase(ctx context.Context, purchase *Purchase) (*Purchase
 }
 
 func (db *DB) OpenPurchase(ctx context.Context, Id int, userId string) (Purchase, error) {
-
 	var purchase Purchase
 	err := db.Conn.QueryRowContext(
 		ctx,
 		`
 with updated_purchase as (
     update purchases
-    set 
-        status = 'opened', 
-        opened = now()
-    where id = $1 
-      and user_id = $2 
-      and status = 'sealed'
-    returning id, user_id, order_id, product, status, payload, created, opened
+    set status = 'opened', opened = now()
+    where id = $1 and user_id = $2 and status = 'sealed'
+    returning id
 ),
 inserted_stones as (
     insert into stones (user_id, type, spark_count)
-    select 
-        p.user_id, 
-        kv.key::stone,
-        kv.value::smallint
-    from updated_purchase p, 
-    jsonb_each_text(p.payload) as kv
+    select p.user_id, kv.key::stone, kv.value::smallint
+    from purchases p, jsonb_each_text(p.payload) as kv
+    where p.id = $1 and exists (select 1 from updated_purchase)
 )
-select * from updated_purchase;`,
+select id, user_id, order_id, product, status, payload, created, opened
+from purchases where id = $1 and user_id = $2;`,
 		Id, userId,
 	).Scan(
 		&purchase.Id,
@@ -813,7 +806,6 @@ select * from updated_purchase;`,
 		&purchase.Created,
 		&purchase.Opened,
 	)
-
 	return purchase, err
 }
 

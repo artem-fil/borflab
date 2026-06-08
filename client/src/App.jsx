@@ -123,7 +123,6 @@ export default function App() {
             }`}
             onTransitionEnd={handleAnimationEnd}
         >
-            {location.pathname !== "/welcome" && authenticated && <NavMenu />}
             <Routes location={displayLocation}>
                 <Route path="/" element={<Home />} />
                 <Route path="/signup" element={<Signup />} />
@@ -137,6 +136,7 @@ export default function App() {
                 <Route path="/policy" element={<Policy />} />
                 <Route path="*" element={<Welcome />} />
             </Routes>
+            {location.pathname !== "/welcome" && authenticated && <NavMenu />}
         </div>
     );
 }

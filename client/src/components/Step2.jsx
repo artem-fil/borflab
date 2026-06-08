@@ -13,7 +13,7 @@ import api from "../api";
 import store from "../store";
 import { clearLog, createPollSession, flushLog, log, prepareSpecimen } from "../utils";
 
-import { BIOMES, STONES } from "../config.js";
+import { BIOMES, RARITIES, STONES } from "../config.js";
 
 // ──────────────────────────────────────────────────────────────────
 
@@ -154,8 +154,6 @@ export default function Step2({ current, specimen, stone, biome }) {
         if (phase !== "GENERATING" && phase !== "MINTING") return;
         if (!backCardRef.current) return;
 
-        // прогресс в фазе генерации идёт от P.Analyzed до 100
-        // нормализуем в 0..1 относительно этого диапазона
         const PHASE_START = 15; // та же цифра что P.Analyzed на сервере, ~23
         const t = Math.min(Math.max((progress - PHASE_START) / (100 - PHASE_START), 0), 1);
         const translateY = 100 - t * 100;
@@ -200,7 +198,6 @@ export default function Step2({ current, specimen, stone, biome }) {
             .catch(() => {});
 
         try {
-            log("specimen:prepare");
             const prepared = await prepareSpecimen(specimen);
 
             const formData = new FormData();
@@ -368,9 +365,11 @@ export default function Step2({ current, specimen, stone, biome }) {
                             opacity: 0.7,
                         }}
                     />
-                    <div ref={monitorRef} className="overflow-auto h-full">
-                        <p>BORFLAB 37.987-B</p>
-                        <p>Progress... {progress}%</p>
+                    <div className="flex justify-between items-center px-0.5 shrink-0">
+                        <span>BORFLAB 37.987-B</span>
+                        <span>Progress... {progress}%</span>
+                    </div>
+                    <div ref={monitorRef} className="overflow-auto" style={{ height: "calc(100% - 1.2em)" }}>
                         <span className="whitespace-pre-wrap">{displayed}</span>
 
                         {minting && <div className="text-orange-400 animate-pulse mt-1">Securing on chain...</div>}
@@ -402,8 +401,16 @@ export default function Step2({ current, specimen, stone, biome }) {
 
                 {/* printer tray */}
                 <div
-                    className="absolute z-20 overflow-hidden pointer-events-none"
-                    style={{ bottom: "56.5%", left: "15%", width: "62%", aspectRatio: "0.62/1" }}
+                    className="absolute z-20 pointer-events-none"
+                    style={{
+                        bottom: "56.5%",
+                        left: "15%",
+                        width: "62%",
+                        aspectRatio: "0.62/1",
+                        clipPath: "inset(0)",
+                        isolation: "isolate",
+                        transform: "translateZ(0)",
+                    }}
                 >
                     {/* Back Card: Analysis Report */}
                     <div
@@ -411,7 +418,21 @@ export default function Step2({ current, specimen, stone, biome }) {
                         className={`box-border w-full absolute ${text} p-1 transition-all ease-out`}
                         style={{ transform: "translateY(100%)", aspectRatio: "0.62 / 1" }}
                     >
-                        <img className="absolute inset-0 w-full h-full" src={cardbackImg} alt="card back" />
+                        <div className="absolute inset-0 w-full h-full">
+                            <img className="w-full h-full" src={cardbackImg} alt="card front" />
+                            {
+                                <div
+                                    className="absolute inset-0 pointer-events-none"
+                                    style={{
+                                        background: RARITIES[analyzeResult?.rarity?.toLowerCase()],
+                                        mixBlendMode: "color",
+                                        opacity: 0.55,
+                                        maskImage: `url(${cardfrontImg})`,
+                                        maskSize: "100% 100%",
+                                    }}
+                                />
+                            }
+                        </div>
                         <div className="relative p-0.5 pb-5 w-full h-full">
                             <div
                                 className="absolute rounded-2xl mx-0.5 mb-5 mt-0.5 bg-paper inset-0 z-10"
@@ -491,7 +512,19 @@ export default function Step2({ current, specimen, stone, biome }) {
                         style={{ transform: "translateY(100%)", aspectRatio: "0.62 / 1" }}
                     >
                         <Link to="/library">
-                            <img className="absolute inset-0 w-full h-full" src={cardfrontImg} alt="card front" />
+                            <div className="absolute inset-0 w-full h-full">
+                                <img className="w-full h-full" src={cardfrontImg} alt="card front" />
+                                <div
+                                    className="absolute inset-0 pointer-events-none"
+                                    style={{
+                                        background: RARITIES[analyzeResult?.rarity?.toLowerCase()],
+                                        mixBlendMode: "color",
+                                        opacity: 0.55,
+                                        maskImage: `url(${cardfrontImg})`,
+                                        maskSize: "100% 100%",
+                                    }}
+                                />
+                            </div>
                             <div className="relative p-0.5 pb-5 w-full h-full ">
                                 <div
                                     className="absolute rounded-xl mx-0.5 mb-5 mt-0.5 bg-paper inset-0 z-10"

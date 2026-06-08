@@ -4,7 +4,7 @@ import watermarkImg from "@images/watermark.png";
 
 import { useState } from "react";
 
-import { BIOMES, STONES } from "../config.js";
+import { BIOMES, RARITIES, STONES } from "../config.js";
 import store from "../store";
 
 export default function Card({ monster }) {
@@ -24,6 +24,7 @@ export default function Card({ monster }) {
         ImageCid,
         ThumbUrl,
         InputUrl,
+        Rarity,
         Created,
     } = monster;
 
@@ -56,7 +57,19 @@ export default function Card({ monster }) {
                         transform: "rotateY(180deg)",
                     }}
                 >
-                    <img className="absolute inset-0 w-full h-full" src={cardbackImg} alt="card back" />
+                    <div className="absolute inset-0 w-full h-full">
+                        <img className="w-full h-full" src={cardbackImg} alt="card front" />
+                        <div
+                            className="absolute inset-0 pointer-events-none"
+                            style={{
+                                background: RARITIES[Rarity.toLowerCase()],
+                                mixBlendMode: "color",
+                                opacity: 0.55,
+                                maskImage: `url(${cardfrontImg})`,
+                                maskSize: "100% 100%",
+                            }}
+                        />
+                    </div>
                     <div className="relative p-2 pb-8 rounded-2xl w-full h-full">
                         <div
                             className="absolute rounded-2xl mx-1 mb-8 mt-1 bg-paper inset-0 z-10"
@@ -73,21 +86,21 @@ export default function Card({ monster }) {
                                 SPECIMEN ANALYSIS LOG // DEPT:006 // CHAPTER I
                             </p>
                             <hr className={`border-0 h-0.5 ${bg}`} />
-                            <div className=" flex w-full items-center">
-                                <div className=" flex items-center p-1 h-24 w-1/3">
+                            <div className="flex w-full items-center">
+                                <div className="flex items-center justify-center p-1 h-24 w-1/3 overflow-hidden">
                                     <img
                                         src={InputUrl}
-                                        className="ml-auto mr-auto rounded object-cover"
+                                        className="rounded object-cover w-full h-full"
                                         alt="input image"
                                     />
                                 </div>
-                                <div className={`border-0 w-px h-full ${bg}`} />
+                                <div className={`border-0 w-px self-stretch ${bg}`} />
                                 <div
                                     className={`uppercase p-1 font-special w-2/3 h-24 flex flex-col justify-between ${text}`}
                                 >
                                     <p>ISSUE DATE: {`${new Date(Created).toLocaleDateString()}`}</p>
                                     <p>SPIRAL INDEX: </p>
-                                    <p>[23/840K BORF’S]</p>
+                                    <p>[23/840K BORF'S]</p>
                                     <p>[23/840K RUBY]</p>
                                     <p>[{Biome}: 001]</p>
                                 </div>
@@ -127,7 +140,20 @@ export default function Card({ monster }) {
 
                 {/* front */}
                 <div className={`w-full absolute inset-0 ${text} text-xs p-1`} style={{ backfaceVisibility: "hidden" }}>
-                    <img className="absolute inset-0 w-full h-full" src={cardfrontImg} alt="card front" />
+                    <div className="absolute inset-0 w-full h-full">
+                        <img className="w-full h-full" src={cardfrontImg} alt="card front" />
+                        <div
+                            className="absolute inset-0 pointer-events-none"
+                            style={{
+                                background: RARITIES[Rarity.toLowerCase()],
+                                mixBlendMode: "color",
+                                opacity: 0.55,
+                                maskImage: `url(${cardfrontImg})`,
+                                maskSize: "100% 100%",
+                            }}
+                        />
+                    </div>
+
                     <div className="relative p-2.5 pb-9 w-full h-full ">
                         <div
                             className="absolute rounded-2xl mx-1 mb-8 mt-1 bg-paper inset-0 z-10"

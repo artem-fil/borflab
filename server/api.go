@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"mime/multipart"
 	"net/http"
@@ -23,9 +24,9 @@ import (
 	computebudget "github.com/gagliardetto/solana-go/programs/compute-budget"
 	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/rpc"
-	"github.com/stripe/stripe-go/v81"
-	"github.com/stripe/stripe-go/v81/paymentintent"
-	"github.com/stripe/stripe-go/v81/webhook"
+	"github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v85/checkout/session"
+	"github.com/stripe/stripe-go/v85/webhook"
 )
 
 const (
@@ -364,7 +365,6 @@ func (a *api) OpenPurchase(w *Responder, r *http.Request) {
 }
 
 func (a *api) CreatePayment(w *Responder, r *http.Request) {
-
 	claims, _ := Claims(r)
 
 	form := &createPaymentForm{}
@@ -378,22 +378,40 @@ func (a *api) CreatePayment(w *Responder, r *http.Request) {
 		a.BadRequestError(w, errors.New("unknown product"))
 		return
 	}
+	email, ok := claims.Email()
+	if !ok {
+		a.BadRequestError(w, errors.New("Invalid email"))
+		return
+	}
 
 	orderId := uuid.New()
 
 	stripe.Key = a.cfg.StripePrivateKey
-	params := &stripe.PaymentIntentParams{
-		Amount:   stripe.Int64(product.Price),
-		Currency: stripe.String(string(stripe.CurrencyUSD)),
-		AutomaticPaymentMethods: &stripe.PaymentIntentAutomaticPaymentMethodsParams{
-			Enabled: stripe.Bool(true),
+	params := &stripe.CheckoutSessionParams{
+		UIMode:        stripe.String("elements"),
+		CustomerEmail: stripe.String(email),
+		Mode:          stripe.String("payment"),
+		LineItems: []*stripe.CheckoutSessionLineItemParams{
+			{
+				PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
+					Currency: stripe.String("usd"),
+					ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
+						Name: stripe.String(product.Id),
+					},
+					UnitAmount: stripe.Int64(product.Price),
+				},
+				Quantity: stripe.Int64(1),
+			},
 		},
-		Metadata: map[string]string{
-			"orderId": orderId.String(),
+		ReturnURL: stripe.String("https://borflab.com/shop"),
+		PaymentIntentData: &stripe.CheckoutSessionPaymentIntentDataParams{
+			Metadata: map[string]string{
+				"orderId": orderId.String(),
+			},
 		},
 	}
 
-	pi, err := paymentintent.New(params)
+	cs, err := session.New(params)
 	if err != nil {
 		a.InternalError(w, err)
 		return
@@ -404,25 +422,21 @@ func (a *api) CreatePayment(w *Responder, r *http.Request) {
 		UserId:         claims.Id,
 		Product:        product.Id,
 		Price:          int(product.Price),
-		StripeIntentId: pi.ID,
+		StripeIntentId: cs.ID, // теперь храним session ID
 	}
 
-	err = a.db.InsertOrder(r.Context(), order)
-
-	if err != nil {
+	if err = a.db.InsertOrder(r.Context(), order); err != nil {
 		a.DbError(w, err)
 		return
 	}
 
-	response := struct {
+	w.Send(struct {
 		OrderId      string
 		ClientSecret string
 	}{
 		OrderId:      orderId.String(),
-		ClientSecret: pi.ClientSecret,
-	}
-
-	w.Send(response)
+		ClientSecret: cs.ClientSecret,
+	})
 }
 
 func (a *api) StripeWebhook(w http.ResponseWriter, r *http.Request) {
@@ -436,8 +450,11 @@ func (a *api) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sigHeader := r.Header.Get("Stripe-Signature")
-	event, err := webhook.ConstructEvent(payload, sigHeader, a.cfg.StripeSecret)
+	event, err := webhook.ConstructEventWithOptions(payload, sigHeader, a.cfg.StripeSecret, webhook.ConstructEventOptions{
+		IgnoreAPIVersionMismatch: true,
+	})
 	if err != nil {
+		log.Printf("ConstructEvent error: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -623,7 +640,7 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		a.InternalError(w, err)
 		return
 	}
-	// 1024px для OpenAI — лучше качество анализа
+
 	analysisImg, err := ResizeJPEG(imgBytes, 1024)
 	if err != nil {
 		a.InternalError(w, err)
@@ -658,6 +675,61 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 	go a.processImage(taskID, analysisImg, insertedExperiment)
 
 	w.Send(struct{ Id string }{Id: taskID})
+}
+
+func (a *api) SubscribeSSE(w http.ResponseWriter, r *http.Request) {
+	key := Param(r)
+
+	if key == "" {
+		http.Error(w, "key required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	sub := a.sseAgent.Subscribe(key)
+	defer a.sseAgent.Unsubscribe(sub)
+
+	ctx := r.Context()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	sendSSE := func(event string, payload any) {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			data = []byte(`{"error":"failed to marshal data"}`)
+		}
+
+		if event != "" {
+			fmt.Fprintf(w, "event: %s\n", event)
+		}
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-sub.conn:
+			sendSSE(msg.Event, msg.Data)
+
+		case <-heartbeat.C:
+			fmt.Fprintf(w, ": heartbeat\n\n")
+			flusher.Flush()
+		}
+	}
 }
 
 func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experiment) {
@@ -775,7 +847,7 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	}
 
 	var parsed map[string]any
-	if err := json.Unmarshal(sanitizedJson, &parsed); err != nil {
+	if err = json.Unmarshal(sanitizedJson, &parsed); err != nil {
 		fail("Failed to parse specimen data", err)
 		return
 	}
@@ -789,6 +861,14 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	analyzed := time.Now().UTC()
 	experiment.Specimen = sanitizedJson
 	experiment.Analyzed = &analyzed
+
+	stats, err := a.db.SelectRarities(context.Background())
+	if err != nil {
+		fail("cannot select rarities", err)
+		return
+	}
+	experiment.Rarity = stats.PickRarity(experiment.Stone)
+
 	if _, err := a.db.AnalyzeExperiment(context.Background(), experiment); err != nil {
 		fail("Database failed to record specimen", err)
 		return
@@ -800,6 +880,8 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	tasks.Store(nextTaskId, nextTs)
 	time.AfterFunc(10*time.Minute, func() { tasks.Delete(nextTaskId) })
 	go a.generateImage(nextTaskId, parsed, *experiment)
+
+	parsed["rarity"] = experiment.Rarity
 
 	ts.Finish(parsed, nextTaskId)
 }
@@ -962,13 +1044,6 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		fail("cannot upload image to ipfs", pr.err)
 		return
 	}
-
-	stats, err := a.db.SelectRarities(context.Background())
-	if err != nil {
-		fail("cannot select rarities", err)
-		return
-	}
-	experiment.Rarity = stats.PickRarity(experiment.Stone)
 
 	metadataBody := map[string]any{
 		"name":                    name,

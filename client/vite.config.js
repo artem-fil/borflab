@@ -10,6 +10,9 @@ export default defineConfig({
         VitePWA({
             registerType: "autoUpdate",
             workbox: {
+                skipWaiting: true,
+                clientsClaim: true,
+                cleanupOutdatedCaches: true,
                 maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, // 5 МБ
             },
             includeAssets: ["favicon.ico", "apple-touch-icon.png", "masked-icon.svg"],
