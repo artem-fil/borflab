@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import secretariatImg from "@images/secretariat.png";
+import secretariatImg from "@images/secretariat.webp";
 
 export default function Policy() {
     const [tab, setTab] = useState(null);

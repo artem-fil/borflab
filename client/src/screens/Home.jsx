@@ -5,7 +5,7 @@ import labImg from "@images/lab.png";
 import libraryImg from "@images/library.png";
 import policyImg from "@images/policy.png";
 import profileImg from "@images/profile.png";
-import secretariatImg from "@images/secretariat.png";
+import secretariatImg from "@images/secretariat.webp";
 import shopImg from "@images/shop.png";
 import storageImg from "@images/storage.png";
 import swapImg from "@images/swap.png";

@@ -1,7 +1,7 @@
 import { useNavigate, useParams } from "react-router-dom";
 
-import cardfrontImg from "@images/card-front.png";
-import swapomatImg from "@images/swapomat.png";
+import cardfrontImg from "@images/card-front.webp";
+import swapomatImg from "@images/swapomat.webp";
 import watermarkImg from "@images/watermark.png";
 import { useWallets } from "@privy-io/react-auth/solana";
 import { useEffect, useRef, useState } from "react";

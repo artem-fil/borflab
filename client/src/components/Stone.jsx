@@ -1,5 +1,5 @@
-import cardbackImg from "@images/card-back.png";
-import cardfrontImg from "@images/card-front.png";
+import cardbackImg from "@images/card-back.webp";
+import cardfrontImg from "@images/card-front.webp";
 
 import { useState } from "react";
 

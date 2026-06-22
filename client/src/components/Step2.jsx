@@ -1,7 +1,7 @@
-import cardbackImg from "@images/card-back.png";
-import cardfrontImg from "@images/card-front.png";
-import poster3Img from "@images/poster03.png";
-import transmutatorImg from "@images/transmutator.png";
+import cardbackImg from "@images/card-back.webp";
+import cardfrontImg from "@images/card-front.webp";
+import poster3Img from "@images/poster03.webp";
+import transmutatorImg from "@images/transmutator.webp";
 import watermarkImg from "@images/watermark.png";
 import { useWallets } from "@privy-io/react-auth/solana";
 import labSound from "@sounds/lab.ogg";

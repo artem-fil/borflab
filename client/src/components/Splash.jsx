@@ -1,19 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 
 import logoImg from "@images/logo.png";
-import secretariatImg from "@images/secretariat.png";
+import secretariatImg from "@images/secretariat.webp";
 
 export default function Splash() {
     const [displayed, setDisplayed] = useState("");
     const monitorRef = useRef(null);
 
-    const progressMessages = ["🔬 activating spiral index ", "🥬 confirming alignment ", "🐌 borfcore initiation "];
+    const progressMessages = [
+        "🔬 activating spiral index",
+        "🥬 confirming alignment",
+        "🧫 calibrating slime matrix",
+        "🍖 preparing Ted",
+        "🐌 borfcore initiation",
+    ];
 
     async function appendTypedLineSequentially(line, isActive) {
         for (let i = 0; i < line.length; i++) {
             if (!isActive()) return;
             setDisplayed((prev) => prev + line[i]);
-            await new Promise((r) => setTimeout(r, 25));
+            await new Promise((r) => setTimeout(r, 24));
         }
         if (isActive()) setDisplayed((prev) => prev + "\n");
     }

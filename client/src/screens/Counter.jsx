@@ -1,4 +1,4 @@
-import secretariatImg from "@images/secretariat.png";
+import secretariatImg from "@images/secretariat.webp";
 import { useEffect, useState } from "react";
 import api from "../api";
 

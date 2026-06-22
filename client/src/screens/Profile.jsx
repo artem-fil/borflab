@@ -1,7 +1,7 @@
 import { usePrivy } from "@privy-io/react-auth";
 import store from "../store.js";
 
-import secretariatImg from "@images/secretariat.png";
+import secretariatImg from "@images/secretariat.webp";
 
 export default function Profile() {
     const { user, logout } = usePrivy();

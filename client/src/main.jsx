@@ -7,15 +7,27 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App.jsx";
 import "./index.css";
 
-import cardbackImg from "@images/card-back.png";
-import cardfrontImg from "@images/card-front.png";
-import watermarkImg from "@images/watermark.png";
+import cardbackImg from "@images/card-back.webp";
+import cardfrontImg from "@images/card-front.webp";
+import igniterImg from "@images/igniter.webp";
+import posterImg from "@images/poster01.webp";
+import poster3Img from "@images/poster03.webp";
+import secretariatImg from "@images/secretariat.webp";
+import swapomatImg from "@images/swapomat.webp";
+import transmutatorImg from "@images/transmutator.webp";
+import watermarkImg from "@images/watermark.webp";
 import { BIOMES, STONES } from "./config.js";
 
 [
     cardbackImg,
     cardfrontImg,
     watermarkImg,
+    igniterImg,
+    posterImg,
+    poster3Img,
+    transmutatorImg,
+    swapomatImg,
+    secretariatImg,
     ...Object.values(STONES).map((s) => s.image),
     ...Object.values(BIOMES).map((b) => b.icon),
 ].forEach((src) => {

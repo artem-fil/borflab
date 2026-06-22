@@ -32,7 +32,7 @@ export default function App() {
     useEffect(() => {
         const timer = setTimeout(() => {
             setMinTimeElapsed(true);
-        }, 3000);
+        }, 5000);
 
         return () => clearTimeout(timer);
     }, []);

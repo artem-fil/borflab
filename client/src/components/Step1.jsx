@@ -1,4 +1,4 @@
-import igniterImg from "@images/igniter2.png";
+import igniterImg from "@images/igniter.webp";
 import posterImg from "@images/poster01.png";
 import alarmSound from "@sounds/alarm.ogg";
 import clickSound from "@sounds/click.ogg";
