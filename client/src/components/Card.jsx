@@ -24,6 +24,9 @@ export default function Card({ monster }) {
         ImageCid,
         ThumbUrl,
         InputUrl,
+        SerialNumber,
+        SerialStone,
+        SerialBiome,
         Rarity,
         Created,
     } = monster;
@@ -100,9 +103,13 @@ export default function Card({ monster }) {
                                 >
                                     <p>ISSUE DATE: {`${new Date(Created).toLocaleDateString()}`}</p>
                                     <p>SPIRAL INDEX: </p>
-                                    <p>[23/840K BORF'S]</p>
-                                    <p>[23/840K RUBY]</p>
-                                    <p>[{Biome}: 001]</p>
+                                    <p>[{SerialNumber} / 840K BORF'S]</p>
+                                    <p>
+                                        [{SerialStone} / {Stone}]
+                                    </p>
+                                    <p>
+                                        [{SerialBiome} / {Biome}]
+                                    </p>
                                 </div>
                             </div>
                             <hr className={`border-0 h-0.5 ${bg}`} />

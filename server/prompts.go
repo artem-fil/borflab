@@ -1,8 +1,9 @@
 package main
 
 import (
-	"math"
+	"context"
 	"math/rand"
+	"sync"
 )
 
 const (
@@ -17,59 +18,61 @@ type prompts struct {
 	PromptGeneration map[Biome]string
 }
 
+var activePrompt struct {
+	mu      sync.RWMutex
+	payload PromptPayload
+}
+
 var sizeMap = map[StoneType]map[Biome]SizeRange{
-    StoneQuartz: {
-        BiomeAmazonia: {1, 40, 1, 1000},
-        BiomePlushland: {1, 70, 1, 6000},
-        BiomeCoralux:  {1, 60, 1, 2000},
-    },
-    StoneAmazonite: {
-        BiomeAmazonia: {1, 40, 1, 5000},
-        BiomePlushland:{1, 100, 1, 7000},
-        BiomeCoralux:  {1, 80, 1, 3000},
-    },
-    StoneRuby: {
-        BiomeAmazonia: {1, 20, 1, 200},
-        BiomePlushland:{1, 160, 1, 20000},
-        BiomeCoralux:  {1, 100, 1, 10000},
-    },
-    StoneAgate: {
-        BiomeAmazonia: {1, 200, 1, 100000},
-        BiomePlushland:{1, 140, 1, 5000},
-        BiomeCoralux:  {1, 30, 1, 500},
-    },
-    StoneSapphire: {
-        BiomeAmazonia: {1, 60, 1, 4000},
-        BiomePlushland:{1, 180, 1, 30000},
-        BiomeCoralux:  {1, 90, 1, 30000},
-    },
-    StoneTopaz: {
-        BiomeAmazonia: {1, 80, 1, 4000},
-        BiomePlushland:{1, 200, 1, 40000},
-        BiomeCoralux:  {1, 40, 1, 6000},
-    },
-    StoneJade: {
-        BiomeAmazonia: {1, 160, 1, 50000},
-        BiomePlushland:{1, 220, 1, 60000},
-        BiomeCoralux:  {1, 80, 1, 12000},
-    },
+	StoneQuartz: {
+		BiomeAmazonia:  {1, 40, 1, 1000},
+		BiomePlushland: {1, 70, 1, 6000},
+		BiomeCoralux:   {1, 60, 1, 2000},
+	},
+	StoneAmazonite: {
+		BiomeAmazonia:  {1, 40, 1, 5000},
+		BiomePlushland: {1, 100, 1, 7000},
+		BiomeCoralux:   {1, 80, 1, 3000},
+	},
+	StoneRuby: {
+		BiomeAmazonia:  {1, 20, 1, 200},
+		BiomePlushland: {1, 160, 1, 20000},
+		BiomeCoralux:   {1, 100, 1, 10000},
+	},
+	StoneAgate: {
+		BiomeAmazonia:  {1, 200, 1, 100000},
+		BiomePlushland: {1, 140, 1, 5000},
+		BiomeCoralux:   {1, 30, 1, 500},
+	},
+	StoneSapphire: {
+		BiomeAmazonia:  {1, 60, 1, 4000},
+		BiomePlushland: {1, 180, 1, 30000},
+		BiomeCoralux:   {1, 90, 1, 30000},
+	},
+	StoneTopaz: {
+		BiomeAmazonia:  {1, 80, 1, 4000},
+		BiomePlushland: {1, 200, 1, 40000},
+		BiomeCoralux:   {1, 40, 1, 6000},
+	},
+	StoneJade: {
+		BiomeAmazonia:  {1, 160, 1, 50000},
+		BiomePlushland: {1, 220, 1, 60000},
+		BiomeCoralux:   {1, 80, 1, 12000},
+	},
 }
 
 func randomSize(stone StoneType, biome Biome) (int, int) {
 	if biomeMap, ok := sizeMap[stone]; ok {
 		if r, ok := biomeMap[biome]; ok {
-			h := rand.Intn(r.MaxHeightCm-r.MinHeightCm+1) + r.MinHeightCm
+			hRange := r.MaxHeightCm - r.MinHeightCm + 1
 
-			minKg := float64(r.MinWeightG) / 1000.0
-			maxKg := float64(r.MaxWeightG) / 1000.0
+			h := rand.Intn(hRange) + r.MinHeightCm
 
-			minSteps := int(math.Ceil(minKg * 2))
-			maxSteps := int(math.Floor(maxKg * 2))
+			wRange := r.MaxWeightG - r.MinWeightG + 1
 
-			steps := rand.Intn(maxSteps-minSteps+1) + minSteps
-			wKg := float64(steps) / 2.0
+			rawG := rand.Intn(wRange) + r.MinWeightG
 
-			w := int(wKg * 1000) 
+			w := ((rawG + 250) / 500) * 500
 
 			return h, w
 		}
@@ -700,4 +703,33 @@ Surface patterns shift for camouflage or signaling. Reduces visibility or presen
 		BiomePlushland: `Use GPT-Image-1.5's cinematic realism mode. Render the creature as a fantastical creature, with exaggerated features not too scary, looking at the camera, in an expressive pose. Ensure natural crafted features, blending the colours and realistic textures.  Never any environment. Set against a transparent background. Turn up the brightness with 30%. NO OUTLINES. NO GROUND SHADOW or REFLECTION. IMPORTANT: Whole creature in frame 1024x1024 format`,
 		BiomeCoralux:   `Use GPT-Image-1.5's cinematic realism mode. Render the creature as a fantastical creature, with exaggerated features not too scary, looking at the camera, in a game character, expressive pose. Ensure all features belong in an aquatic environment, blending the colours and realistic textures. Whole creature in frame. Never any environment. Set against a transparent background. Turn up the brightness with 30%. NO OUTLINES. NO GROUND SHADOW.`,
 	},
+}
+
+func LoadActivePrompt(ctx context.Context, db *DB) {
+	p, err := db.SelectActivePrompt(ctx)
+	if err != nil {
+		LogError("Prompts", "No active prompt in DB, starting with empty payload", err)
+		return
+	}
+	activePrompt.mu.Lock()
+	activePrompt.payload = *p
+	activePrompt.mu.Unlock()
+	LogInfo("Prompts", "Active prompt loaded from DB")
+}
+
+func ReloadActivePrompt(ctx context.Context, db *DB) error {
+	p, err := db.SelectActivePrompt(ctx)
+	if err != nil {
+		return err
+	}
+	activePrompt.mu.Lock()
+	activePrompt.payload = *p
+	activePrompt.mu.Unlock()
+	return nil
+}
+
+func GetActivePrompt() PromptPayload {
+	activePrompt.mu.RLock()
+	defer activePrompt.mu.RUnlock()
+	return activePrompt.payload
 }

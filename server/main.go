@@ -41,6 +41,8 @@ func main() {
 	}
 	defer db.Close()
 
+	LoadActivePrompt(ctx, db)
+
 	telegram := NewTelegram(cfg.Telegram, cfg.Environment)
 	mddlwr := NewMiddleware(cfg.Privy)
 	rpcClient := rpc.New(rpc.DevNet.RPC)

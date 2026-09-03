@@ -189,6 +189,10 @@ func (a *api) GetStones(w *Responder, r *http.Request) {
 
 func (a *api) GetMonsters(w *Responder, r *http.Request) {
 
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
 	ctx := r.Context()
 	claims, _ := Claims(r)
 
@@ -553,22 +557,46 @@ func (a *api) GetTaskStatus(w *Responder, r *http.Request) {
 }
 
 func (a *api) GetMintStatus(w *Responder, r *http.Request) {
-	expId := Param(r)
-	if expId == "" {
+	expIdStr := Param(r)
+	if expIdStr == "" {
 		a.BadRequestError(w, fmt.Errorf("experiment id required"))
 		return
 	}
 
-	raw, ok := mintStatuses.Load(expId)
+	expId, err := strconv.Atoi(expIdStr)
+	if err != nil {
+		a.BadRequestError(w, fmt.Errorf("invalid experiment id"))
+		return
+	}
+
+	// Проверяем статус в БД
+	status, err := a.db.SelectMonsterStatus(r.Context(), expId)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	// Если в БД уже "active" - сразу отдаем confirmed
+	if status == "active" {
+		w.Send(&MintStatus{Status: "confirmed"})
+		return
+	}
+
+	// Если "failed" - отдаем ошибку
+	if status == "failed" {
+		w.Send(&MintStatus{Status: "failed", Error: "mint failed"})
+		return
+	}
+
+	// Если "pending" - проверяем mintStatuses
+	raw, ok := mintStatuses.Load(expIdStr)
 	if !ok {
-		// not yet stored – transaction not sent yet or expId wrong
 		w.Send(&MintStatus{Status: "pending"})
 		return
 	}
 
-	w.Header().Set("Cache-Control", "no-store")
-
-	w.Send(raw.(*MintStatus))
+	ms := raw.(*MintStatus)
+	w.Send(ms)
 }
 
 func (a *api) GetSwapStatus(w *Responder, r *http.Request) {
@@ -585,96 +613,6 @@ func (a *api) GetSwapStatus(w *Responder, r *http.Request) {
 	}
 
 	w.Send(raw.(*SwapStatus))
-}
-
-func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
-
-	taskID := uuid.NewString()
-
-	ts := &TaskStatus{}
-	ts.SetStage(P.Started, P.Analyzed, AVG_ANALYZE_TIME)
-	tasks.Store(taskID, ts)
-
-	time.AfterFunc(10*time.Minute, func() {
-		tasks.Delete(taskID)
-	})
-
-	ctx := r.Context()
-	claims, _ := Claims(r)
-
-	selectedStone, err := a.db.SelectStone(ctx, r.FormValue("stone"), claims.Id)
-
-	if err != nil {
-		a.DbError(w, fmt.Errorf("cannot select stone %v", err))
-		return
-	}
-
-	biome, err := CheckBiome(r.FormValue("biome"))
-	if err != nil || biome == nil {
-		a.BadRequestError(w, err)
-		return
-	}
-
-	imgFile, _, err := r.FormFile("file")
-	if err != nil {
-		a.InternalError(w, err)
-		return
-	}
-	defer imgFile.Close()
-
-	imgBytes, err := io.ReadAll(imgFile)
-	if err != nil {
-		a.InternalError(w, err)
-		return
-	}
-
-	// input metadata
-	inputMime, inputWidth, inputHeight, inputSize, err := imageInfo(imgBytes)
-	if err != nil {
-		a.InternalError(w, err)
-		return
-	}
-
-	storageImg, err := ResizeJPEG(imgBytes, 400)
-	if err != nil {
-		a.InternalError(w, err)
-		return
-	}
-
-	analysisImg, err := ResizeJPEG(imgBytes, 1024)
-	if err != nil {
-		a.InternalError(w, err)
-		return
-	}
-
-	expUUID := uuid.NewString()
-	inputKey := fmt.Sprintf("monsters/%s/input.jpg", expUUID)
-
-	if err := a.r2.Upload(r.Context(), inputKey, "image/jpeg", storageImg); err != nil {
-		a.InternalError(w, fmt.Errorf("cannot upload input to r2: %w", err))
-		return
-	}
-
-	experiment := &Experiment{
-		UUID:        expUUID,
-		UserId:      claims.Id,
-		InputMime:   inputMime,
-		InputWidth:  inputWidth,
-		InputHeight: inputHeight,
-		InputSize:   inputSize,
-		InputUrl:    a.r2.URL(inputKey),
-		Stone:       StoneType(selectedStone.Type),
-		Biome:       *biome,
-	}
-	insertedExperiment, err := a.db.InsertExperiment(r.Context(), experiment)
-	if err != nil {
-		a.DbError(w, fmt.Errorf("cannot insert experiment %v", err))
-		return
-	}
-
-	go a.processImage(taskID, analysisImg, insertedExperiment)
-
-	w.Send(struct{ Id string }{Id: taskID})
 }
 
 func (a *api) SubscribeSSE(w http.ResponseWriter, r *http.Request) {
@@ -732,6 +670,97 @@ func (a *api) SubscribeSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
+
+	taskID := uuid.NewString()
+
+	ts := &TaskStatus{}
+	ts.SetStage(P.Started, P.Analyzed, AVG_ANALYZE_TIME)
+	tasks.Store(taskID, ts)
+
+	time.AfterFunc(10*time.Minute, func() {
+		tasks.Delete(taskID)
+	})
+
+	ctx := r.Context()
+	claims, _ := Claims(r)
+
+	selectedStone, err := a.db.SelectStone(ctx, r.FormValue("stone"), claims.Id)
+
+	if err != nil {
+		a.DbError(w, fmt.Errorf("cannot select stone %v", err))
+		return
+	}
+
+	biome, err := CheckBiome(r.FormValue("biome"))
+	if err != nil || biome == nil {
+		a.BadRequestError(w, err)
+		return
+	}
+
+	imgFile, _, err := r.FormFile("file")
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+	defer imgFile.Close()
+
+	imgBytes, err := io.ReadAll(imgFile)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	// input metadata
+	inputMime, inputWidth, inputHeight, inputSize, err := imageInfo(imgBytes)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	// storageImg, err := ResizeJPEG(imgBytes, 400)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	analysisImg, err := ResizeJPEG(imgBytes, 1024)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	expUUID := uuid.NewString()
+	inputKey := fmt.Sprintf("monsters/%s/input.jpg", expUUID)
+	/*
+		if err := a.r2.Upload(r.Context(), inputKey, "image/jpeg", storageImg); err != nil {
+			a.InternalError(w, fmt.Errorf("cannot upload input to r2: %w", err))
+			return
+		}
+	*/
+
+	experiment := &Experiment{
+		UUID:        expUUID,
+		UserId:      claims.Id,
+		InputMime:   inputMime,
+		InputWidth:  inputWidth,
+		InputHeight: inputHeight,
+		InputSize:   inputSize,
+		InputUrl:    a.r2.URL(inputKey),
+		Stone:       StoneType(selectedStone.Type),
+		Biome:       *biome,
+	}
+	insertedExperiment, err := a.db.InsertExperiment(r.Context(), experiment)
+	if err != nil {
+		a.DbError(w, fmt.Errorf("cannot insert experiment %v", err))
+		return
+	}
+
+	go a.processImage(taskID, analysisImg, insertedExperiment)
+
+	w.Send(struct{ Id string }{Id: taskID})
+}
+
 func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experiment) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -757,13 +786,15 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 
 	// ── prompt assembly ───────────────────────────────────────────────────────
 
-	biomePrompt, ok1 := Prompts.PromptAnalyze[experiment.Biome]
-	stonePrompt, ok2 := Prompts.PromptStone[experiment.Stone][experiment.Biome]
+	p := GetActivePrompt()
+	biomePrompt, ok1 := p.PromptAnalyze[experiment.Biome]
+	stonePrompt, ok2 := p.PromptStone[experiment.Stone][experiment.Biome]
 	if !ok1 || !ok2 {
 		fail("Laboratory database error: missing prompts for biome or stone", nil)
 		return
 	}
 	prompt := fmt.Sprintf(biomePrompt, stonePrompt)
+	experiment.PromptAnalyzeUsed = prompt
 
 	ts.SetProgress(P.Analyzed)
 
@@ -837,6 +868,20 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	if err = json.Unmarshal(respBody, &rawResp); err != nil || len(rawResp.Choices) == 0 {
 		fail("Laboratory analyzer returned corrupted data", err)
 		return
+	}
+
+	var usageResp struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(respBody, &usageResp); err == nil {
+		if experiment.TokensUsed == nil {
+			experiment.TokensUsed = &TokensUsed{}
+		}
+		experiment.TokensUsed.AnalyzeTextIn = usageResp.Usage.PromptTokens
+		experiment.TokensUsed.AnalyzeOut = usageResp.Usage.CompletionTokens
 	}
 
 	content := rawResp.Choices[0].Message.Content
@@ -946,15 +991,26 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	height := strconv.Itoa(h)
 	weight := strconv.Itoa(w)
 
-	prompt := fmt.Sprintf("%s.\n %s", renderDirective, Prompts.PromptGeneration[experiment.Biome])
+	p := GetActivePrompt()
+	prompt := fmt.Sprintf("%s.\n %s", renderDirective, p.PromptGeneration[experiment.Biome])
+	experiment.PromptGenerationUsed = prompt
+
+	quality := experiment.Quality
+	if quality == "" {
+		quality = "high"
+	}
+	size := experiment.Size
+	if size == "" {
+		size = "1024x1024"
+	}
 
 	// ── build OpenAI image request ────────────────────────────────────────────
 
 	requestBody := map[string]any{
 		"model":      "gpt-image-1.5",
 		"n":          1,
-		"size":       "1024x1024",
-		"quality":    "high",
+		"size":       size,
+		"quality":    quality,
 		"prompt":     prompt,
 		"moderation": "low",
 	}
@@ -996,19 +1052,39 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		return
 	}
 
+	var usageResp struct {
+		Usage struct {
+			InputTokens        int `json:"input_tokens"`
+			OutputTokens       int `json:"output_tokens"`
+			InputTokensDetails struct {
+				TextTokens  int `json:"text_tokens"`
+				ImageTokens int `json:"image_tokens"`
+			} `json:"input_tokens_details"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(respBody, &usageResp); err == nil {
+		if experiment.TokensUsed == nil {
+			experiment.TokensUsed = &TokensUsed{}
+		}
+		experiment.TokensUsed.GenerateTextIn = usageResp.Usage.InputTokens
+		experiment.TokensUsed.GenerateImgOut = usageResp.Usage.OutputTokens
+	}
+
 	base64Image := parsedResp.Data[0].B64JSON
 	generated := time.Now().UTC()
 
 	ts.SetProgress(P.Generated)
 	ts.SetStage(P.Generated, P.Finished, AVG_UPLOAD_TIME)
 
-	imageBytes, err := base64.StdEncoding.DecodeString(base64Image)
-	if err != nil {
-		fail("cannot decode base64 image", err)
-		return
-	}
+	/*
+		imageBytes, err := base64.StdEncoding.DecodeString(base64Image)
+		if err != nil {
+			fail("cannot decode base64 image", err)
+			return
+		}
+	*/
 
-	thumbBytes, err := ResizePNG(imageBytes, 400)
+	// thumbBytes, err := ResizePNG(imageBytes, 400)
 	if err != nil {
 		fail("cannot resize thumb", err)
 		return
@@ -1027,14 +1103,16 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	imageKey := fmt.Sprintf("monsters/%s/image.png", experiment.UUID)
 	thumbKey := fmt.Sprintf("monsters/%s/thumb.png", experiment.UUID)
 
-	if err = a.r2.Upload(ctx, imageKey, "image/png", imageBytes); err != nil {
-		fail("cannot upload image to r2", err)
-		return
-	}
-	if err = a.r2.Upload(ctx, thumbKey, "image/png", thumbBytes); err != nil {
-		fail("cannot upload thumb to r2", err)
-		return
-	}
+	/*
+		if err = a.r2.Upload(ctx, imageKey, "image/png", imageBytes); err != nil {
+			fail("cannot upload image to r2", err)
+			return
+		}
+		if err = a.r2.Upload(ctx, thumbKey, "image/png", thumbBytes); err != nil {
+			fail("cannot upload thumb to r2", err)
+			return
+		}
+	*/
 
 	experiment.ImageUrl = a.r2.URL(imageKey)
 	experiment.ThumbUrl = a.r2.URL(thumbKey)
@@ -1094,6 +1172,11 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	experiment.Generated = &generated
 	experiment.Uploaded = &uploaded
 
+	// ── final cost ────────────────────────────────────────────────────────────
+	if experiment.TokensUsed != nil {
+		experiment.Cost = experiment.TokensUsed.TotalCost()
+	}
+
 	if _, err := a.db.FinishExperiment(context.Background(), &experiment); err != nil {
 		fail("cannot update experiment", err)
 		return
@@ -1126,6 +1209,12 @@ func (a *api) MintMonster(w *Responder, r *http.Request) {
 	var parsed map[string]any
 	if err := json.Unmarshal(experiment.Specimen, &parsed); err != nil {
 		a.InternalError(w, fmt.Errorf("cannot unmarshal specimen: %v", err))
+		return
+	}
+	monsterProfile, ok := parsed["MONSTER_PROFILE"].(map[string]any)
+	if !ok {
+		// Обработка ошибки, если MONSTER_PROFILE не является map
+		a.InternalError(w, fmt.Errorf("MONSTER_PROFILE is not a map"))
 		return
 	}
 
@@ -1253,6 +1342,83 @@ func (a *api) MintMonster(w *Responder, r *http.Request) {
 		return
 	}
 
+	weight := 300
+	height := 200
+
+	ownerAddress := form.UserPubKey
+
+	txDB, err := a.db.Conn.BeginTx(ctx, nil)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot start db transaction: %v", err))
+		return
+	}
+	defer txDB.Rollback()
+
+	monsterForSpark := &Monster{
+		ExperimentId: experiment.Id,
+		Stone:        experiment.Stone,
+		OwnerAddress: &ownerAddress,
+	}
+	if err := a.db.DecreaseStoneSparksTx(ctx, txDB, monsterForSpark); err != nil {
+		a.InternalError(w, fmt.Errorf("cannot decrease stone sparks: %v", err))
+		return
+	}
+
+	// 2. Получаем серийные номера
+	global, byStone, byBiome, err := a.db.NextSerials(ctx, txDB, experiment.Stone, experiment.Biome)
+	if err != nil {
+		a.InternalError(w, fmt.Errorf("cannot get serials: %v", err))
+		return
+	}
+
+	monster := &Monster{
+		ExperimentId:  experiment.Id,
+		MintAddress:   mintPubKey.String(),
+		OwnerAddress:  &ownerAddress,
+		Name:          monsterProfile["name"].(string),
+		Species:       monsterProfile["species"].(string),
+		Lore:          monsterProfile["lore"].(string),
+		Height:        height,
+		Weight:        weight,
+		MovementClass: monsterProfile["movement_class"].(string),
+		Behaviour:     monsterProfile["behaviour"].(string),
+		Personality:   monsterProfile["personality"].(string),
+		Abilities:     monsterProfile["abilities"].(string),
+		Habitat:       monsterProfile["habitat"].(string),
+		Biome:         experiment.Biome,
+		Rarity:        experiment.Rarity,
+		Stone:         experiment.Stone,
+		SerialNumber:  global,
+		SerialStone:   byStone,
+		SerialBiome:   byBiome,
+		Generation:    1,
+		Status:        "pending",
+		MetadataUri:   uri,
+		ImageCid:      experiment.MetadataCID,
+		Minted:        time.Now().UTC(),
+	}
+
+	// Сохраняем монстра в БД
+	if err := a.db.InsertMonsterTx(ctx, txDB, monster); err != nil {
+		a.InternalError(w, fmt.Errorf("cannot save monster to database: %v", err))
+		return
+	}
+
+	// Коммитим транзакцию
+	if err := txDB.Commit(); err != nil {
+		a.InternalError(w, fmt.Errorf("cannot commit db transaction: %v", err))
+		return
+	}
+
+	a.telegram.SendMessage(
+		PubChannel,
+		"New monster %s has been inserted into DB.\nBiome: %s\nRarity: %s\nStone: %s",
+		monster.Name,
+		monster.Biome,
+		monster.Rarity,
+		monster.Stone,
+	)
+
 	sig, err := a.rpcClient.SendTransaction(solanaCtx, tx)
 	if err != nil {
 		a.InternalError(w, fmt.Errorf("failed to send transaction: %v", err))
@@ -1277,6 +1443,16 @@ func (a *api) trackMintConfirmation(experimentId string, sig solana.Signature) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	expId, err := strconv.Atoi(experimentId)
+	if err != nil {
+		LogError("Mint", "Invalid experiment id in trackMintConfirmation", err)
+		mintStatuses.Store(experimentId, &MintStatus{
+			Status: "failed",
+			Error:  fmt.Sprintf("invalid experiment id: %s", experimentId),
+		})
+		return
+	}
+
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
@@ -1287,6 +1463,10 @@ func (a *api) trackMintConfirmation(experimentId string, sig solana.Signature) {
 				Status: "failed",
 				Error:  "confirmation timeout",
 			})
+
+			if err := a.db.UpdateMonsterStatus(context.Background(), expId, "failed"); err != nil {
+				LogError("Mint", "Failed to update monster status to failed", err)
+			}
 			return
 
 		case <-ticker.C:
@@ -1303,6 +1483,9 @@ func (a *api) trackMintConfirmation(experimentId string, sig solana.Signature) {
 					Status: "failed",
 					Error:  fmt.Sprintf("chain error: %v", result.Err),
 				})
+				if err := a.db.UpdateMonsterStatus(context.Background(), expId, "failed"); err != nil {
+					LogError("Mint", "Failed to update monster status to failed", err)
+				}
 				return
 			}
 
@@ -1715,6 +1898,301 @@ func (a *api) DebugLog(w *Responder, r *http.Request) {
 		logText)
 
 	w.Send(struct{ Ok bool }{Ok: true})
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+func parseSlotN(r *http.Request) (int, bool) {
+	n, err := strconv.Atoi(Params(r)["n"])
+	if err != nil || n < 1 || n > 5 {
+		return 0, false
+	}
+	return n, true
+}
+
+// ── GET /api/dashboard/prompts ────────────────────────────────────────────────
+
+func (a *api) GetAdminPrompts(w *Responder, r *http.Request) {
+	ctx := r.Context()
+
+	slots, err := a.db.SelectPrompts(ctx)
+	if err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	// активный — слот 0, остальные — пресеты 1-5
+	var active *Prompt
+	var presets []Prompt
+	for _, s := range slots {
+		s := s
+		if s.Slot == 0 {
+			active = &s
+		} else {
+			presets = append(presets, s)
+		}
+	}
+
+	w.Send(struct {
+		Active  *Prompt
+		Presets []Prompt
+	}{
+		Active:  active,
+		Presets: presets,
+	})
+}
+
+// ── PUT /api/dashboard/prompts/active ────────────────────────────────────────
+
+func (a *api) SaveActivePrompt(w *Responder, r *http.Request) {
+	ctx := r.Context()
+
+	var form savePromptSlotForm
+	if err := ParseBody(r, &form); err != nil {
+		a.BadRequestError(w, err)
+		return
+	}
+
+	if err := a.db.UpsertPrompt(ctx, 0, form.Name, form.Payload); err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	if err := ReloadActivePrompt(ctx, a.db); err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	w.Send(struct{ Ok bool }{Ok: true})
+}
+
+// ── PUT /api/dashboard/prompts/slots/:n ──────────────────────────────────────
+
+type savePromptSlotForm struct {
+	Name    string
+	Payload PromptPayload
+}
+
+func (a *api) SavePrompt(w *Responder, r *http.Request) {
+	ctx := r.Context()
+
+	n, ok := parseSlotN(r)
+	if !ok {
+		a.BadRequestError(w, fmt.Errorf("slot must be 1-5"))
+		return
+	}
+
+	var form savePromptSlotForm
+	if err := ParseBody(r, &form); err != nil {
+		a.BadRequestError(w, err)
+		return
+	}
+
+	if err := a.db.UpsertPrompt(ctx, n, form.Name, form.Payload); err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	w.Send(struct{ Ok bool }{Ok: true})
+}
+
+// ── POST /api/dashboard/prompts/slots/:n/activate ────────────────────────────
+
+func (a *api) ActivatePrompt(w *Responder, r *http.Request) {
+	ctx := r.Context()
+
+	n, ok := parseSlotN(r)
+	if !ok {
+		a.BadRequestError(w, fmt.Errorf("slot must be 1-5"))
+		return
+	}
+
+	if err := a.db.ActivatePrompt(ctx, n); err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	if err := ReloadActivePrompt(ctx, a.db); err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	w.Send(struct{ Ok bool }{Ok: true})
+}
+
+// ── DELETE /api/dashboard/prompts/slots/:n ───────────────────────────────────
+
+func (a *api) ClearPrompt(w *Responder, r *http.Request) {
+	ctx := r.Context()
+
+	n, ok := parseSlotN(r)
+	if !ok {
+		a.BadRequestError(w, fmt.Errorf("slot must be 1-5"))
+		return
+	}
+
+	if err := a.db.ClearPrompt(ctx, n); err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	w.Send(struct{ Ok bool }{Ok: true})
+}
+
+func (a *api) GenerateTest(w *Responder, r *http.Request) {
+	ctx := r.Context()
+	claims, _ := Claims(r)
+	taskID := uuid.NewString()
+
+	ts := &TaskStatus{}
+	ts.SetStage(P.Started, P.Analyzed, AVG_ANALYZE_TIME)
+	tasks.Store(taskID, ts)
+	time.AfterFunc(10*time.Minute, func() { tasks.Delete(taskID) })
+
+	stoneType := StoneType(r.FormValue("stone"))
+	if stoneType == "" {
+		a.BadRequestError(w, fmt.Errorf("stone is required"))
+		return
+	}
+
+	biome, err := CheckBiome(r.FormValue("biome"))
+	if err != nil || biome == nil {
+		a.BadRequestError(w, err)
+		return
+	}
+
+	quality := r.FormValue("quality")
+	if quality == "" {
+		quality = "medium"
+	}
+
+	size := r.FormValue("size")
+	if size == "" {
+		size = "1024x1024"
+	}
+
+	imgFile, _, err := r.FormFile("file")
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+	defer imgFile.Close()
+
+	imgBytes, err := io.ReadAll(imgFile)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	inputMime, inputWidth, inputHeight, inputSize, err := imageInfo(imgBytes)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	storageImg, err := ResizeJPEG(imgBytes, 400)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	analysisImg, err := ResizeJPEG(imgBytes, 1024)
+	if err != nil {
+		a.InternalError(w, err)
+		return
+	}
+
+	expUUID := uuid.NewString()
+	inputKey := fmt.Sprintf("test/%s/input.jpg", expUUID)
+
+	if err := a.r2.Upload(ctx, inputKey, "image/jpeg", storageImg); err != nil {
+		a.InternalError(w, fmt.Errorf("cannot upload input to r2: %w", err))
+		return
+	}
+
+	experiment := &Experiment{
+		UUID:        expUUID,
+		UserId:      claims.Id,
+		InputMime:   inputMime,
+		InputWidth:  inputWidth,
+		InputHeight: inputHeight,
+		InputSize:   inputSize,
+		InputUrl:    a.r2.URL(inputKey),
+		Stone:       stoneType,
+		Biome:       *biome,
+		IsTest:      true,
+		Quality:     quality,
+		Size:        size,
+	}
+
+	insertedExperiment, err := a.db.InsertExperiment(ctx, experiment)
+	if err != nil {
+		a.DbError(w, fmt.Errorf("cannot insert experiment: %v", err))
+		return
+	}
+
+	go a.processImage(taskID, analysisImg, insertedExperiment)
+
+	w.Send(struct{ Id string }{Id: taskID})
+}
+
+// ── GET /api/dashboard/experiments ───────────────────────────────────────────
+
+func (a *api) GetAdminExperiments(w *Responder, r *http.Request) {
+	ctx := r.Context()
+	query := r.URL.Query()
+
+	page := ParseInt(query.Get("page"), 1, 1, 1000)
+	limit := ParseInt(query.Get("limit"), 24, 1, 100)
+	offset := (page - 1) * limit
+
+	parseList := func(key string) []string {
+		v := query.Get(key)
+		if v == "" {
+			return nil
+		}
+		var result []string
+		for _, s := range strings.Split(v, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+
+	opts := ExperimentFilter{
+		OnlyTest:  query.Get("only_test") != "false",
+		Stones:    parseList("stones"),
+		Biomes:    parseList("biomes"),
+		Qualities: parseList("qualities"),
+		Rarities:  parseList("rarities"),
+		Sort:      query.Get("sort"),
+		Order:     query.Get("order"),
+		Limit:     limit,
+		Offset:    offset,
+	}
+
+	experiments, total, err := a.db.SelectAdminExperiments(ctx, opts)
+	if err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	pages := 0
+	if total > 0 {
+		pages = (total + limit - 1) / limit
+	}
+
+	w.Send(struct {
+		Experiments []Experiment
+		Total       int
+		Pages       int
+	}{
+		Experiments: experiments,
+		Total:       total,
+		Pages:       pages,
+	})
 }
 
 func encodeSwapCardInstructionData() []byte {

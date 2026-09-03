@@ -96,11 +96,70 @@ type Experiment struct {
 	Biome       Biome
 	Rarity      Rarity
 
+	// dashboard
+	IsTest               bool
+	PromptAnalyzeUsed    string
+	PromptGenerationUsed string
+	Quality              string
+	Size                 string
+	TokensUsed           *TokensUsed
+	Cost                 float64
+
 	Created   time.Time
 	Analyzed  *time.Time
 	Generated *time.Time
 	Uploaded  *time.Time
 	Minted    *time.Time
+}
+
+type TokensUsed struct {
+	AnalyzeTextIn  int
+	AnalyzeImgIn   int
+	AnalyzeOut     int
+	GenerateTextIn int
+	GenerateImgOut int
+}
+
+func (t *TokensUsed) TotalCost() float64 {
+
+	const (
+		gpt4oTextIn = 0.005
+		gpt4oImgIn  = 0.005
+		gpt4oOut    = 0.015
+		imgTextIn   = 0.005
+		imgOut      = 0.015
+	)
+	total := float64(t.AnalyzeTextIn)/1000*gpt4oTextIn +
+		float64(t.AnalyzeImgIn)/1000*gpt4oImgIn +
+		float64(t.AnalyzeOut)/1000*gpt4oOut +
+		float64(t.GenerateTextIn)/1000*imgTextIn +
+		float64(t.GenerateImgOut)/1000*imgOut
+	return total
+}
+
+type PromptPayload struct {
+	PromptAnalyze    map[Biome]string
+	PromptStone      map[StoneType]map[Biome]string
+	PromptGeneration map[Biome]string
+}
+
+type ExperimentFilter struct {
+	OnlyTest  bool
+	Stones    []string
+	Biomes    []string
+	Qualities []string
+	Rarities  []string
+	Sort      string
+	Order     string
+	Limit     int
+	Offset    int
+}
+
+type Prompt struct {
+	Slot    int
+	Name    string
+	Payload PromptPayload
+	Updated time.Time
 }
 
 type Stone struct {
@@ -157,6 +216,8 @@ type Monster struct {
 	Rarity        Rarity
 	Stone         StoneType
 	SerialNumber  int
+	SerialStone   int
+	SerialBiome   int
 	Generation    int
 
 	Status string
@@ -169,6 +230,8 @@ type Monster struct {
 	InputUrl *string
 	ImageUrl *string
 	ThumbUrl *string
+	// Sprites stores a map of sprite pose names to their CID/URL, populated asynchronously
+	Sprites map[string]string `json:"sprites,omitempty"`
 
 	Minted  time.Time
 	Created time.Time

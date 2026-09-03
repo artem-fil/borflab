@@ -104,6 +104,14 @@ export default {
                 limit: limit ?? 10,
                 sort: sort ?? "created",
                 order: order ?? "desc",
+                _: Date.now(),
+            },
+
+            cache: "no-store",
+            headers: {
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                Pragma: "no-cache",
+                Expires: "0",
             },
         });
     },
@@ -233,5 +241,71 @@ export default {
                 es.close();
             },
         };
+    },
+
+    // dashboard
+
+    getPrompts() {
+        return request("/dashboard/prompts");
+    },
+
+    saveActivePrompt(name, payload) {
+        return request("/dashboard/prompts/active", {
+            method: "PUT",
+            body: { name, payload },
+        });
+    },
+
+    saveSlot(n, name, payload) {
+        return request(`/dashboard/prompts/${n}`, {
+            method: "PUT",
+            body: { name, payload },
+        });
+    },
+
+    activateSlot(n) {
+        return request(`/dashboard/prompts/${n}/activate`, {
+            method: "POST",
+        });
+    },
+
+    clearSlot(n) {
+        return request(`/dashboard/prompts/slots/${n}`, {
+            method: "DELETE",
+        });
+    },
+
+    generate(formData) {
+        return request("/dashboard/generate", {
+            method: "POST",
+            body: formData,
+            timeout: 30000,
+        });
+    },
+
+    async getExperiments(page = 1, filters = {}) {
+        const {
+            limit = 24,
+            onlyTest = true,
+            stones,
+            biomes,
+            qualities,
+            rarities,
+            sort = "created",
+            order = "desc",
+        } = filters;
+        return request("/dashboard/experiments", {
+            params: {
+                page,
+                limit,
+                sort,
+                order,
+                only_test: onlyTest,
+                ...(stones?.length ? { stones: stones.join(",") } : {}),
+                ...(biomes?.length ? { biomes: biomes.join(",") } : {}),
+                ...(qualities?.length ? { qualities: qualities.join(",") } : {}),
+                ...(rarities?.length ? { rarities: rarities.join(",") } : {}),
+            },
+        });
     },
 };

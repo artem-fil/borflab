@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -363,7 +364,7 @@ select
 	biome, rarity, stone,
 	metadata_uri, image_cid,
 	input_url, image_url, thumb_url,
-	serial_number, generation, status,
+	serial_number, serial_stone, serial_biome, generation, status,
 	signature, slot, minted, created
 from monsters where user_id = $1 order by %s limit $2 offset $3;`, sortOrder),
 		userId, limit, offset,
@@ -383,7 +384,7 @@ from monsters where user_id = $1 order by %s limit $2 offset $3;`, sortOrder),
 			&m.Biome, &m.Rarity, &m.Stone,
 			&m.MetadataUri, &m.ImageCid,
 			&m.InputUrl, &m.ImageUrl, &m.ThumbUrl,
-			&m.SerialNumber, &m.Generation, &m.Status,
+			&m.SerialNumber, &m.SerialStone, &m.SerialBiome, &m.Generation, &m.Status,
 			&m.Signature, &m.Slot, &m.Minted, &m.Created,
 		)
 		if err != nil {
@@ -405,7 +406,7 @@ select
 	biome, rarity, stone,
 	metadata_uri, image_cid,
 	input_url, image_url, thumb_url,
-	serial_number, generation, status,
+	serial_number, serial_stone, serial_biome, generation, status,
 	signature, slot, minted, created
 from monsters where mint_address = $1 and user_id = $2;`, mintAddress, userId).Scan(
 		&m.Id, &m.UserId, &m.ExperimentId,
@@ -415,7 +416,7 @@ from monsters where mint_address = $1 and user_id = $2;`, mintAddress, userId).S
 		&m.Biome, &m.Rarity, &m.Stone,
 		&m.MetadataUri, &m.ImageCid,
 		&m.InputUrl, &m.ImageUrl, &m.ThumbUrl,
-		&m.SerialNumber, &m.Generation, &m.Status,
+		&m.SerialNumber, &m.SerialStone, &m.SerialBiome, &m.Generation, &m.Status,
 		&m.Signature, &m.Slot, &m.Minted, &m.Created,
 	)
 	return m, err
@@ -468,57 +469,77 @@ LIMIT $1;`, limit)
 func (db *DB) InsertExperiment(ctx context.Context, e *Experiment) (*Experiment, error) {
 	row := db.Conn.QueryRowContext(ctx, `
 insert into experiments (
-    uuid,
-    user_id,
-    input_mime,
-    input_size,
-    input_width,
-    input_height,
-    input_url,
-    stone,
-    biome
-) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    uuid, user_id,
+    input_mime, input_size, input_width, input_height, input_url,
+    stone, biome,
+    is_test, quality, size
+) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 returning
-    id,
-    uuid,
-    user_id,
-    input_mime,
-    input_size,
-    input_width,
-    input_height,
-    input_url,
-    stone,
-    biome,
+    id, uuid, user_id,
+    input_mime, input_size, input_width, input_height, input_url,
+    stone, biome,
+    is_test, quality, size,
     created
-    `,
-		e.UUID,
-		e.UserId,
-		e.InputMime,
-		e.InputSize,
-		e.InputWidth,
-		e.InputHeight,
-		e.InputUrl,
-		e.Stone,
-		e.Biome,
+	`,
+		e.UUID, e.UserId,
+		e.InputMime, e.InputSize, e.InputWidth, e.InputHeight, e.InputUrl,
+		e.Stone, e.Biome,
+		e.IsTest, e.Quality, e.Size,
 	)
 
 	var i Experiment
 	if err := row.Scan(
-		&i.Id,
-		&i.UUID,
-		&i.UserId,
-		&i.InputMime,
-		&i.InputSize,
-		&i.InputWidth,
-		&i.InputHeight,
-		&i.InputUrl,
-		&i.Stone,
-		&i.Biome,
+		&i.Id, &i.UUID, &i.UserId,
+		&i.InputMime, &i.InputSize, &i.InputWidth, &i.InputHeight, &i.InputUrl,
+		&i.Stone, &i.Biome,
+		&i.IsTest, &i.Quality, &i.Size,
 		&i.Created,
 	); err != nil {
 		return nil, err
 	}
 	return &i, nil
+}
+
+func (db *DB) FinishExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
+	var tokensArg interface{}
+	if e.TokensUsed != nil {
+		b, err := json.Marshal(e.TokensUsed)
+		if err != nil {
+			return nil, err
+		}
+		tokensArg = b
+	}
+
+	return db.Conn.ExecContext(ctx, `
+update experiments set
+    rarity                 = $1,
+    image_cid              = $2,
+    metadata_cid           = $3,
+    metadata               = $4,
+    image_url              = $5,
+    thumb_url              = $6,
+    generated              = $7,
+    uploaded               = $8,
+    prompt_analyze_used    = $9,
+    prompt_generation_used = $10,
+    tokens_used            = $11,
+    cost                   = $12
+where id = $13
+	`,
+		e.Rarity,
+		e.ImageCID,
+		e.MetadataCID,
+		e.Metadata,
+		e.ImageUrl,
+		e.ThumbUrl,
+		e.Generated,
+		e.Uploaded,
+		e.PromptAnalyzeUsed,
+		e.PromptGenerationUsed,
+		tokensArg,
+		e.Cost,
+		e.Id,
+	)
 }
 
 func (db *DB) SelectExperiment(ctx context.Context, id string) (*Experiment, error) {
@@ -587,31 +608,6 @@ update experiments set
     analyzed = $2
 where id = $3
     `, e.Specimen, e.Analyzed, e.Id)
-}
-
-func (db *DB) FinishExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
-	return db.Conn.ExecContext(ctx, `
-update experiments set
-    rarity       = $1,
-    image_cid    = $2,
-    metadata_cid = $3,
-    metadata     = $4,
-    image_url    = $5,
-    thumb_url    = $6,
-    generated    = $7,
-    uploaded     = $8
-where id = $9
-    `,
-		e.Rarity,
-		e.ImageCID,
-		e.MetadataCID,
-		e.Metadata,
-		e.ImageUrl,
-		e.ThumbUrl,
-		e.Generated,
-		e.Uploaded,
-		e.Id,
-	)
 }
 
 func (db *DB) SelectRarities(ctx context.Context) (RarityStats, error) {
@@ -866,7 +862,7 @@ where id = (
 }
 
 func (db *DB) InsertMonsterTx(ctx context.Context, tx *sql.Tx, monster *Monster) error {
-	result, err := tx.ExecContext(ctx, `
+	result, err := db.Conn.ExecContext(ctx, `
 insert into monsters (
     user_id,
 	experiment_id,
@@ -891,6 +887,8 @@ insert into monsters (
 	image_url,
 	thumb_url,
     serial_number,
+	serial_stone,
+	serial_biome,
 	generation,
 	status,
 	signature,
@@ -926,7 +924,9 @@ insert into monsters (
 	$24,
 	$25,
 	$26,
-	$27
+	$27,
+	$28,
+	$29
 ) on conflict (signature) do nothing
     `,
 		monster.OwnerAddress,     // $1
@@ -951,11 +951,13 @@ insert into monsters (
 		monster.MetadataUri,      // $20
 		monster.ImageCid,         // $21
 		monster.SerialNumber,     // $22
-		monster.Generation,       // $23
-		monster.Status,           // $24
-		monster.Signature,        // $25
-		monster.Slot,             // $26
-		monster.Minted,           // $27
+		monster.SerialStone,      // $23
+		monster.SerialBiome,      // $24
+		monster.Generation,       // $25
+		monster.Status,           // $26
+		monster.Signature,        // $27
+		monster.Slot,             // $28
+		monster.Minted,           // $29
 	)
 	if err != nil {
 		return err
@@ -968,6 +970,20 @@ insert into monsters (
 		return fmt.Errorf("no rows inserted for monster: %s", monster.MintAddress)
 	}
 	return nil
+}
+
+func (db *DB) UpdateMonsterStatus(ctx context.Context, experimentId int, status string) error {
+	_, err := db.Conn.ExecContext(ctx, `UPDATE monsters  SET status = $1 WHERE experiment_id = $2`, status, experimentId)
+	return err
+}
+
+func (db *DB) SelectMonsterStatus(ctx context.Context, experimentId int) (string, error) {
+	var status string
+	err := db.Conn.QueryRowContext(ctx, `SELECT status FROM monsters WHERE experiment_id = $1`, experimentId).Scan(&status)
+	if err == sql.ErrNoRows {
+		return "not_found", nil
+	}
+	return status, err
 }
 
 func (db *DB) SwapMonsterTx(
@@ -1028,6 +1044,18 @@ WHERE mint_address = $2
 	return nil
 }
 
+func (db *DB) NextSerials(ctx context.Context, tx *sql.Tx, stone StoneType, biome Biome) (global, byStone, byBiome int, err error) {
+	err = tx.QueryRowContext(ctx,
+		`select
+            coalesce(max(serial_number), 0) + 1,
+            coalesce(max(case when stone = $1 then serial_stone end), 0) + 1,
+            coalesce(max(case when biome = $2 then serial_biome end), 0) + 1
+        from monsters`,
+		stone, biome,
+	).Scan(&global, &byStone, &byBiome)
+	return
+}
+
 func (db *DB) SelectTxStatus(ctx context.Context, signature string) (bool, error) {
 	exists := false
 	err := db.Conn.QueryRowContext(
@@ -1043,10 +1071,266 @@ func (db *DB) SelectTxStatus(ctx context.Context, signature string) (bool, error
 	return exists, err
 }
 
+// ── Prompts ───────────────────────────────────────────────────────────────────
+
+func (db *DB) SelectActivePrompt(ctx context.Context) (*PromptPayload, error) {
+	row := db.Conn.QueryRowContext(ctx,
+		`select payload from prompts where slot = 0`)
+
+	var raw []byte
+	if err := row.Scan(&raw); err != nil {
+		return nil, err
+	}
+	var p PromptPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func (db *DB) SelectPrompts(ctx context.Context) ([]Prompt, error) {
+	rows, err := db.Conn.QueryContext(ctx,
+		`select slot, name, payload, updated
+         from prompts
+         order by slot`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var slots []Prompt
+	for rows.Next() {
+		var s Prompt
+		var raw []byte
+		if err := rows.Scan(&s.Slot, &s.Name, &raw, &s.Updated); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &s.Payload); err != nil {
+			return nil, err
+		}
+		slots = append(slots, s)
+	}
+	return slots, rows.Err()
+}
+
+// UpsertPrompt — slot=0 это активный, slot=1..5 это пресеты
+func (db *DB) UpsertPrompt(ctx context.Context, slot int, name string, payload PromptPayload) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = db.Conn.ExecContext(ctx, `
+insert into prompts (slot, name, payload, updated)
+values ($1, $2, $3, now())
+on conflict (slot) do update set
+    name       = excluded.name,
+    payload    = excluded.payload,
+    updated = now()
+	`, slot, name, raw)
+	return err
+}
+
+func (db *DB) ClearPrompt(ctx context.Context, slot int) error {
+	_, err := db.Conn.ExecContext(ctx,
+		`delete from prompts where slot = $1 and slot != 0`,
+		slot)
+	return err
+}
+
+func (db *DB) ActivatePrompt(ctx context.Context, slot int) error {
+	_, err := db.Conn.ExecContext(ctx, `
+WITH active_slot AS (
+    SELECT name, payload FROM prompts WHERE slot = 0
+),
+target_slot AS (
+    SELECT name, payload FROM prompts WHERE slot = $1
+)
+UPDATE prompts
+SET 
+    name = CASE 
+        WHEN slot = 0 THEN COALESCE((SELECT name FROM target_slot), name)
+        WHEN slot = $1 THEN COALESCE((SELECT name FROM active_slot), name)
+    END,
+    payload = CASE 
+        WHEN slot = 0 THEN (SELECT payload FROM target_slot)
+        WHEN slot = $1 THEN (SELECT payload FROM active_slot)
+    END,
+    updated = now()
+WHERE slot IN (0, $1);
+	`, slot)
+	return err
+}
+
+// ── Admin experiments gallery ─────────────────────────────────────────────────
+
+func (db *DB) SelectAdminExperiments(ctx context.Context, opts ExperimentFilter) ([]Experiment, int, error) {
+	sort := opts.Sort
+	order := opts.Order
+	allowedSorts := map[string]bool{"created": true, "stone": true, "biome": true, "rarity": true}
+	if !allowedSorts[sort] {
+		sort = "created"
+	}
+	if order != "asc" && order != "desc" {
+		order = "desc"
+	}
+
+	args := []any{}
+	conditions := []string{}
+	i := 1
+
+	placeholder := func(v any) string {
+		args = append(args, v)
+		s := fmt.Sprintf("$%d", i)
+		i++
+		return s
+	}
+
+	// is_test filter
+	if opts.OnlyTest {
+		conditions = append(conditions, "is_test = true")
+	}
+
+	// stones
+	if len(opts.Stones) > 0 {
+		placeholders := make([]string, len(opts.Stones))
+		for j, s := range opts.Stones {
+			placeholders[j] = placeholder(s)
+		}
+		conditions = append(conditions, fmt.Sprintf("stone IN (%s)", strings.Join(placeholders, ",")))
+	}
+
+	// biomes
+	if len(opts.Biomes) > 0 {
+		placeholders := make([]string, len(opts.Biomes))
+		for j, b := range opts.Biomes {
+			placeholders[j] = placeholder(b)
+		}
+		conditions = append(conditions, fmt.Sprintf("biome IN (%s)", strings.Join(placeholders, ",")))
+	}
+
+	// quality
+	if len(opts.Qualities) > 0 {
+		placeholders := make([]string, len(opts.Qualities))
+		for j, q := range opts.Qualities {
+			placeholders[j] = placeholder(q)
+		}
+		conditions = append(conditions, fmt.Sprintf("quality IN (%s)", strings.Join(placeholders, ",")))
+	}
+
+	// rarity
+	if len(opts.Rarities) > 0 {
+		placeholders := make([]string, len(opts.Rarities))
+		for j, r := range opts.Rarities {
+			placeholders[j] = placeholder(r)
+		}
+		conditions = append(conditions, fmt.Sprintf("rarity IN (%s)", strings.Join(placeholders, ",")))
+	}
+
+	where := ""
+	if len(conditions) > 0 {
+		where = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	// only fetch experiments that have finished generating
+	if where == "" {
+		where = "WHERE image_url IS NOT NULL"
+	} else {
+		where += " AND image_url IS NOT NULL"
+	}
+
+	limitP := placeholder(opts.Limit)
+	offsetP := placeholder(opts.Offset)
+
+	query := fmt.Sprintf(`
+select
+    id, uuid, user_id,
+    input_url, image_url, thumb_url,
+    stone, biome, rarity,
+    is_test, quality, size,
+    prompt_analyze_used, prompt_generation_used,
+    tokens_used, cost,
+    created, analyzed, generated, uploaded
+from experiments
+%s
+order by %s %s
+limit %s offset %s
+	`, where, sort, order, limitP, offsetP)
+
+	rows, err := db.Conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var result []Experiment
+	for rows.Next() {
+		var e Experiment
+		var tokensRaw []byte
+		var imageUrl, thumbUrl, rarity sql.NullString
+		var promptAnalyze, promptGeneration sql.NullString
+		var quality, size sql.NullString // добавь это
+		var cost sql.NullFloat64
+
+		if err := rows.Scan(
+			&e.Id, &e.UUID, &e.UserId,
+			&e.InputUrl, &imageUrl, &thumbUrl,
+			&e.Stone, &e.Biome, &rarity,
+			&e.IsTest, &quality, &size,
+			&promptAnalyze, &promptGeneration,
+			&tokensRaw, &cost,
+			&e.Created, &e.Analyzed, &e.Generated, &e.Uploaded,
+		); err != nil {
+			return nil, 0, err
+		}
+
+		e.ImageUrl = imageUrl.String
+		e.ThumbUrl = thumbUrl.String
+		e.Rarity = Rarity(rarity.String)
+		e.PromptAnalyzeUsed = promptAnalyze.String
+		e.PromptGenerationUsed = promptGeneration.String
+		e.Quality = quality.String
+		e.Size = size.String
+		e.Cost = cost.Float64
+
+		if tokensRaw != nil {
+			var t TokensUsed
+			if err := json.Unmarshal(tokensRaw, &t); err == nil {
+				e.TokensUsed = &t
+			}
+		}
+		result = append(result, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	// count
+	countQuery := fmt.Sprintf(`select count(*) from experiments %s`, where)
+	var total int
+	if err := db.Conn.QueryRowContext(ctx, countQuery, args[:len(args)-2]...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	return result, total, nil
+}
+
 func nullable(s string) sql.NullString {
 	if s == "" {
 		LogWarning("DB", "empty string converted to SQL nullstring")
 		return sql.NullString{Valid: false}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+// nullableJSONB returns a sql.NullString containing the JSONB representation of v, or an invalid NullString if v is nil or marshals to an empty object.
+func nullableJSONB(v map[string]string) sql.NullString {
+	if v == nil || len(v) == 0 {
+		return sql.NullString{Valid: false}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		LogWarning("DB", fmt.Sprintf("failed to marshal map to JSONB: %v", err))
+		return sql.NullString{Valid: false} // Or handle error appropriately
+	}
+	return sql.NullString{String: string(b), Valid: true}
 }

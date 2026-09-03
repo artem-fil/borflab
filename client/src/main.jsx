@@ -3,6 +3,7 @@ import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
+import { registerSW } from "virtual:pwa-register";
 
 import App from "./App.jsx";
 import "./index.css";
@@ -33,6 +34,28 @@ import { BIOMES, STONES } from "./config.js";
 ].forEach((src) => {
     const img = new Image();
     img.src = src;
+});
+
+// Автообновление SW: как только новый воркер задеплоен и взял контроль — форсим релоад,
+// чтобы клиент не сидел неделями на старом JS-бандле (актуально для установленного PWA).
+const updateSW = registerSW({
+    immediate: true,
+    onNeedRefresh() {
+        updateSW(true);
+    },
+    onRegisteredSW(swUrl, registration) {
+        // подстраховка: если есть уже waiting-воркер на момент регистрации — тоже обновляемся
+        if (registration?.waiting) {
+            updateSW(true);
+        }
+    },
+});
+
+let refreshing = false;
+navigator.serviceWorker?.addEventListener("controllerchange", () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
 });
 
 const appId = "cmggax81g00zgh20b0z7052t6";

@@ -52,6 +52,15 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	// stripe webhook
 	router.Handle("POST", "/api/stripe-webhook", api.StripeWebhook)
 
+	// dashboard
+	router.Handle("GET", "/dashboard/prompts", mddlwr.RequireAdmin(api.GetAdminPrompts))
+	router.Handle("PUT", "/dashboard/prompts/active", mddlwr.RequireAdmin(api.SaveActivePrompt))
+	router.Handle("PUT", "/dashboard/prompts/:n", mddlwr.RequireAdmin(api.SavePrompt))
+	router.Handle("POST", "/dashboard/prompts/:n/activate", mddlwr.RequireAdmin(api.ActivatePrompt))
+	router.Handle("DELETE", "/dashboard/prompts/:n", mddlwr.RequireAdmin(api.ClearPrompt))
+	router.Handle("POST", "/dashboard/generate", mddlwr.RequireAdmin(api.GenerateTest))
+	router.Handle("GET", "/dashboard/experiments", mddlwr.RequireAdmin(api.GetAdminExperiments))
+
 	return router
 }
 

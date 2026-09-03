@@ -168,6 +168,36 @@ func (m *Middleware) RequireAuth(next func(*Responder, *http.Request)) http.Hand
 	})
 }
 
+func (m *Middleware) RequireAdmin(next func(*Responder, *http.Request)) http.Handler {
+	var adminAllowlist = []string{
+		"iamjacksleastwastedlife@gmail.com",
+		"paalwsm@gmail.com",
+	}
+
+	return m.RequireAuth(func(rw *Responder, r *http.Request) {
+		claims, ok := Claims(r)
+		if !ok {
+			rw.SendUnauthorized()
+			return
+		}
+
+		email, ok := claims.Email()
+		if !ok {
+			rw.SendForbidden()
+			return
+		}
+
+		for _, allowed := range adminAllowlist {
+			if allowed == email {
+				next(rw, r)
+				return
+			}
+		}
+
+		rw.SendForbidden()
+	})
+}
+
 func (m *Middleware) CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")

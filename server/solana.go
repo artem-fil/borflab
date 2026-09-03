@@ -421,6 +421,7 @@ func (sa *SolanaAgent) processNotification(ctx context.Context, input []byte) {
 func (sa *SolanaAgent) processSingleSignature(ctx context.Context, sig string, slot int64) error {
 	isNew, err := sa.db.RegisterNotificationIfNew(ctx, sig, slot)
 	if err != nil {
+		sa.telegram.SendMessage(DevChannel, "❌ RegisterNotificationIfNew failed\nSig: %s\nErr: %v", sig, err)
 		return fmt.Errorf("db registration failed: %w", err)
 	}
 	if !isNew {
@@ -443,6 +444,7 @@ func (sa *SolanaAgent) processSingleSignature(ctx context.Context, sig string, s
 	if err != nil {
 		notification.Stage = SolanaStageInternalError
 		sa.db.UpdateSolanaNotification(ctx, &notification)
+		sa.telegram.SendMessage(DevChannel, "❌ RPC GetTransaction failed\nSig: %s\nErr: %v", sig, err)
 		LogError("Solana", fmt.Sprintf("[%s] RPC GetTransaction failed", sig), err)
 		return fmt.Errorf("rpc error for %s: %w", sig, err)
 	}
@@ -450,26 +452,31 @@ func (sa *SolanaAgent) processSingleSignature(ctx context.Context, sig string, s
 	notification.Params.Result.Value.Logs = txResp.Meta.LogMessages
 	if txResp.Meta.Err != nil {
 		notification.Stage = SolanaStageTxError
+		sa.telegram.SendMessage(DevChannel, "❌ Tx failed on-chain\nSig: %s\nErr: %v", sig, txResp.Meta.Err)
 	} else {
 		programId := solana.MustPublicKeyFromBase58(sa.cfg.ProgramId)
 		sep := NewSolanaEventProcessor(programId, sa.rpcClient, sa.httpClient)
 		if err := sep.ExtractEvents(&notification); err != nil {
-			LogError("Solana", fmt.Sprintf("[%s] Event extraction failed: %v", sig), err)
 			notification.Stage = SolanaStageEventError
+			sa.telegram.SendMessage(DevChannel, "❌ ExtractEvents failed\nSig: %s\nErr: %v", sig, err)
+			LogError("Solana", fmt.Sprintf("[%s] Event extraction failed: %v", sig), err)
 		} else {
 			processResult, err := sep.ProcessEvents(ctx, &notification)
 			if err != nil {
-				LogError("Solana", fmt.Sprintf("[%s] ProcessEvents business logic failed", sig), err)
 				notification.Stage = SolanaStageBusinessError
+				sa.telegram.SendMessage(DevChannel, "❌ ProcessEvents failed\nSig: %s\nErr: %v", sig, err)
+				LogError("Solana", fmt.Sprintf("[%s] ProcessEvents business logic failed", sig), err)
 			} else {
 				if processResult.Mutator.HasMutations() {
 					if err := processResult.Mutator.ApplyAll(ctx, sa.db); err != nil {
-						LogError("Solana", fmt.Sprintf("[%s] DB Mutation ApplyAll failed", sig), err)
 						notification.Stage = SolanaStageInternalError
+						sa.telegram.SendMessage(DevChannel, "❌ DB Mutation ApplyAll failed\nSig: %s\nErr: %v", sig, err)
+						LogError("Solana", fmt.Sprintf("[%s] DB Mutation ApplyAll failed", sig), err)
 					}
 				}
 				if notification.Stage == SolanaStageDone && processResult.Applicator.HasApplications() {
 					if err := processResult.Applicator.ApplyAll(ctx, sa.telegram, sa.sseAgent); err != nil {
+						sa.telegram.SendMessage(DevChannel, "⚠️ Applicator ApplyAll failed\nSig: %s\nErr: %v", sig, err)
 						LogError("Solana", fmt.Sprintf("[%s] External notification failed", sig), err)
 					}
 				}
@@ -478,9 +485,12 @@ func (sa *SolanaAgent) processSingleSignature(ctx context.Context, sig string, s
 	}
 
 	if err := sa.db.UpdateSolanaNotification(ctx, &notification); err != nil {
+		sa.telegram.SendMessage(DevChannel, "❌ Final DB update failed\nSig: %s\nErr: %v", sig, err)
 		LogError("Solana", fmt.Sprintf("[%s] Final DB update failed", sig), err)
 		return fmt.Errorf("failed to update notification: %w", err)
 	}
+
+	sa.Log(notification)
 
 	if notification.Stage != SolanaStageDone && notification.Stage != SolanaStageTxError {
 		return fmt.Errorf("processing stopped at stage: %s", notification.Stage)
@@ -630,6 +640,12 @@ func (sep *SolanaEventProcessor) ProcessEvents(ctx context.Context, notification
 					break
 				}
 				ownerPubKeyStr := ownerPubKey.String()
+
+				result.Mutator.AddMutation(&UpdateMonsterStatusMutation{
+					ExperimentId: int(payload.ExperimentId),
+					Status:       "active",
+				})
+
 				monster := &Monster{
 					ExperimentId:     int(payload.ExperimentId),
 					Signature:        signature,
@@ -657,8 +673,6 @@ func (sep *SolanaEventProcessor) ProcessEvents(ctx context.Context, notification
 					ImageCid:         metadata["image"],
 					Minted:           time.Unix(int64(*blocktime), 0).UTC(),
 				}
-				result.Mutator.AddMutation(&UseStoneSparkMutation{Monster: monster})
-				result.Mutator.AddMutation(&InsertMonsterMutation{Monster: monster})
 				result.Applicator.AddApplication(&MintMonsterApplication{Monster: monster})
 			}
 		case "CardExchanged":
@@ -1191,7 +1205,28 @@ type InsertMonsterMutation struct {
 }
 
 func (m *InsertMonsterMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) error {
+
+	global, byStone, byBiome, err := db.NextSerials(ctx, tx, m.Monster.Stone, m.Monster.Biome)
+	if err != nil {
+		return fmt.Errorf("cannot get serials: %w", err)
+	}
+	m.Monster.SerialNumber = global
+	m.Monster.SerialStone = byStone
+	m.Monster.SerialBiome = byBiome
+
 	return db.InsertMonsterTx(ctx, tx, m.Monster)
+}
+
+type UpdateMonsterStatusMutation struct {
+	ExperimentId int
+	Status       string
+}
+
+func (m *UpdateMonsterStatusMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE monsters SET status = $1 WHERE experiment_id = $2
+	`, m.Status, m.ExperimentId)
+	return err
 }
 
 type CardExchangeMutation struct {

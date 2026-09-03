@@ -14,6 +14,41 @@ export default defineConfig({
                 clientsClaim: true,
                 cleanupOutdatedCaches: true,
                 maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, // 5 МБ
+
+                runtimeCaching: [
+                    {
+                        // API запросы - НЕ КЕШИРУЕМ
+                        urlPattern: /^\/api\/.*/i,
+                        handler: "NetworkOnly",
+                        options: {
+                            // Пустые опции = нет кеша
+                        },
+                    },
+                    {
+                        // Статические файлы (CSS, JS) - кешируем как обычно
+                        urlPattern: /\.(js|css|png|jpg|jpeg|svg|gif|webp|ico)$/,
+                        handler: "CacheFirst",
+                        options: {
+                            cacheName: "static-assets",
+                            expiration: {
+                                maxEntries: 100,
+                                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 дней
+                            },
+                        },
+                    },
+                    {
+                        // Изображения - кешируем
+                        urlPattern: /\.(png|jpg|jpeg|svg|gif|webp|ico)$/,
+                        handler: "CacheFirst",
+                        options: {
+                            cacheName: "images",
+                            expiration: {
+                                maxEntries: 50,
+                                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 дней
+                            },
+                        },
+                    },
+                ],
             },
             includeAssets: ["favicon.ico", "apple-touch-icon.png", "masked-icon.svg"],
             manifest: {

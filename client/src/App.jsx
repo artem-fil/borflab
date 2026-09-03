@@ -5,6 +5,8 @@ import NavMenu from "@components/NavMenu";
 import Splash from "@components/Splash";
 import { useEffect, useState } from "react";
 import Counter from "./screens/Counter";
+import Dashboard from "./screens/Dashboard";
+import Gallery from "./screens/Gallery";
 import Home from "./screens/Home";
 import Lab from "./screens/Lab";
 import Library from "./screens/Library";
@@ -46,6 +48,21 @@ export default function App() {
             return () => clearTimeout(exitTimer);
         }
     }, [ready, minTimeElapsed]);
+
+    useEffect(() => {
+        const handlePageShow = (event) => {
+            if (event.persisted) {
+                console.log("🔄 iPhone bfcache detected - refreshing data");
+                window.location.reload();
+            }
+        };
+
+        window.addEventListener("pageshow", handlePageShow);
+
+        return () => {
+            window.removeEventListener("pageshow", handlePageShow);
+        };
+    }, []);
 
     const [displayLocation, setDisplayLocation] = useState(location);
     const [transitionStage, setTransitionStage] = useState("fadeIn");
@@ -90,11 +107,21 @@ export default function App() {
         "/library": "bg-[#ddcfb7]",
         "/shop": "bg-[#ddcfb7]",
         "/storage": "bg-black",
+        "/dashboard": "bg-gray-900",
     };
+    const isDashboard = location.pathname === "/dashboard" || location.pathname === "/gallery";
 
     const bgClass = bgMap[location.pathname] ?? "bg-app";
 
-    if (showSplash) {
+    if (!ready && isDashboard) {
+        return (
+            <div className="flex items-center justify-center w-screen h-screen bg-gray-950 text-gray-500 text-sm">
+                loading...
+            </div>
+        );
+    }
+
+    if (showSplash && !isDashboard) {
         return (
             <div
                 className={`flex flex-col bg-cover bg-bottom bg-no-repeat relative w-screen h-screen overflow-hidden font-plex py-6 bg-app 
@@ -105,6 +132,13 @@ export default function App() {
         );
     }
     if (!authenticated || !identityToken) {
+        if (isDashboard) {
+            return (
+                <div className="flex items-center justify-center w-screen h-screen bg-gray-950 text-gray-500 text-sm">
+                    loading...
+                </div>
+            );
+        }
         return (
             <div
                 className={`flex flex-col bg-cover bg-bottom bg-no-repeat relative w-screen h-screen overflow-hidden font-plex py-6 bg-app`}
@@ -135,8 +169,10 @@ export default function App() {
                 <Route path="/counter" element={<Counter />} />
                 <Route path="/policy" element={<Policy />} />
                 <Route path="*" element={<Welcome />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/gallery" element={<Gallery />} />
             </Routes>
-            {location.pathname !== "/welcome" && authenticated && <NavMenu />}
+            {location.pathname !== "/welcome" && location.pathname !== "/dashboard" && authenticated && <NavMenu />}
         </div>
     );
 }
