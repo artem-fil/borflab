@@ -640,19 +640,29 @@ func (sep *SolanaEventProcessor) ProcessEvents(ctx context.Context, notification
 					break
 				}
 				ownerPubKeyStr := ownerPubKey.String()
-
-				result.Mutator.AddMutation(&UpdateMonsterStatusMutation{
-					ExperimentId: int(payload.ExperimentId),
-					Status:       "active",
-				})
-
-				monster := &Monster{
+				fmt.Printf("owner adrress %v  mintpubkey: %v", ownerPubKeyStr, mintPubKey.String())
+				result.Mutator.AddMutation(&ConfirmMonsterMintMutation{
 					ExperimentId:     int(payload.ExperimentId),
 					Signature:        signature,
 					Slot:             slot,
 					MintAddress:      mintPubKey.String(),
-					OwnerAddress:     &ownerPubKeyStr,
+					OwnerAddress:     ownerPubKeyStr,
 					CardStateAddress: cardStatePubKey.String(),
+					MetadataUri:      *metadataUri,
+					Status:           "active",
+					Minted:           time.Unix(int64(*blocktime), 0).UTC(),
+				})
+				image := metadata["image"]
+				mpk := mintPubKey.String()
+				csa := cardStatePubKey.String()
+				minted := time.Unix(int64(*blocktime), 0).UTC()
+				monster := &Monster{
+					ExperimentId:     int(payload.ExperimentId),
+					Signature:        &signature,
+					Slot:             &slot,
+					MintAddress:      &mpk,
+					OwnerAddress:     &ownerPubKeyStr,
+					CardStateAddress: &csa,
 					Name:             metadata["name"],
 					Species:          metadata["species"],
 					Lore:             metadata["lore"],
@@ -669,9 +679,9 @@ func (sep *SolanaEventProcessor) ProcessEvents(ctx context.Context, notification
 					SerialNumber:     int(payload.SerialNumber),
 					Generation:       1,
 					Status:           "active",
-					MetadataUri:      *metadataUri,
-					ImageCid:         metadata["image"],
-					Minted:           time.Unix(int64(*blocktime), 0).UTC(),
+					MetadataUri:      metadataUri,
+					ImageCid:         &image,
+					Minted:           &minted,
 				}
 				result.Applicator.AddApplication(&MintMonsterApplication{Monster: monster})
 			}
@@ -1200,23 +1210,6 @@ func (m *UseStoneSparkMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) e
 	return db.DecreaseStoneSparksTx(ctx, tx, m.Monster)
 }
 
-type InsertMonsterMutation struct {
-	Monster *Monster
-}
-
-func (m *InsertMonsterMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) error {
-
-	global, byStone, byBiome, err := db.NextSerials(ctx, tx, m.Monster.Stone, m.Monster.Biome)
-	if err != nil {
-		return fmt.Errorf("cannot get serials: %w", err)
-	}
-	m.Monster.SerialNumber = global
-	m.Monster.SerialStone = byStone
-	m.Monster.SerialBiome = byBiome
-
-	return db.InsertMonsterTx(ctx, tx, m.Monster)
-}
-
 type UpdateMonsterStatusMutation struct {
 	ExperimentId int
 	Status       string
@@ -1237,6 +1230,67 @@ type CardExchangeMutation struct {
 
 func (m *CardExchangeMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) error {
 	return db.SwapMonsterTx(ctx, tx, m.OwnerAddress, m.LostMint, m.GainedMint)
+}
+
+type ConfirmMonsterMintMutation struct {
+	ExperimentId     int
+	Signature        string
+	Slot             int64
+	MintAddress      string
+	OwnerAddress     string
+	CardStateAddress string
+	MetadataUri      string
+	Status           string
+	Minted           time.Time
+}
+
+func (m *ConfirmMonsterMintMutation) Apply(ctx context.Context, tx *sql.Tx, db *DB) error {
+	existing, err := db.SelectMonsterByExperimentIdTx(ctx, tx, m.ExperimentId)
+	if err != nil {
+		fmt.Println(err)
+		return fmt.Errorf("cannot find monster row for experiment %d: %w", m.ExperimentId, err)
+	}
+	if existing == nil {
+		fmt.Println(err)
+		return fmt.Errorf("no monster row for experiment %d — mint confirmation has nothing to update", m.ExperimentId)
+	}
+
+	// Soft integrity check, "without fanaticism": the metadata URI was
+	// already written to this row (unconfirmed) when the mint tx was built
+	// in mintNFT/UpdateMonsterCids, before it was ever sent to the chain.
+	// If what's now confirmed on-chain doesn't match what we think we sent,
+	// that's worth a log line — but the chain is the source of truth, so
+	// we don't block the update over it, just flag it for a human to check.
+	if existing.MetadataUri != nil && *existing.MetadataUri != "" && *existing.MetadataUri != m.MetadataUri {
+		LogError("Solana", fmt.Sprintf(
+			"metadata URI mismatch for experiment %d: expected %s, confirmed on-chain %s",
+			m.ExperimentId, *existing.MetadataUri, m.MetadataUri,
+		), nil)
+	}
+
+	// Deliberately NOT touching serial_number / serial_stone / serial_biome
+	// here. Those are already assigned locally at insert time (NextSerials
+	// in generateImage), and the on-chain event only carries a single flat
+	// SerialNumber with no stone/biome breakdown — overwriting from that
+	// would risk desyncing the three counters. Left untouched on purpose;
+	// flag if you actually want the chain's serial to be authoritative.
+
+	_, err = tx.ExecContext(ctx, `
+		UPDATE monsters
+		SET signature         = $1,
+		    slot               = $2,
+		    mint_address       = $3,
+		    owner_address      = $4,
+		    card_state_address = $5,
+		    metadata_uri       = $6,
+		    status             = $7,
+		    minted             = $8
+		WHERE experiment_id = $9
+	`, m.Signature, m.Slot, m.MintAddress, m.OwnerAddress, m.CardStateAddress,
+		m.MetadataUri, m.Status, m.Minted, m.ExperimentId)
+	fmt.Println(err)
+
+	return err
 }
 
 type BinaryReader struct {

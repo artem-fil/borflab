@@ -90,6 +90,9 @@ export default defineConfig({
     resolve: {
         alias: {
             "@components": path.resolve(__dirname, "src/components"),
+            "@screens": path.resolve(__dirname, "src/screens"),
+            "@hooks": path.resolve(__dirname, "src/hooks"),
+            "@games": path.resolve(__dirname, "src/games"),
             "@images": path.resolve(__dirname, "src/assets/images"),
             "@sounds": path.resolve(__dirname, "src/assets/sounds"),
         },

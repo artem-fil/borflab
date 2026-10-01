@@ -185,7 +185,7 @@ export default function Library() {
             {monsterDialog ? (
                 <div className="w-full px-4 flex gap-2 items-center justify-center py-4 text-lg">
                     <Button onClick={() => navigate(`/swapomat/${monsterDialog.MintAddress}`)} label={"swap"} />
-                    <Button disabled label={"play"} />
+                    <Button onClick={() => navigate("/games", { state: { monster: monsterDialog } })} label={"play"} />
                 </div>
             ) : (
                 <div className="w-full px-4 flex gap-2 items-center justify-between py-4 text-lg">

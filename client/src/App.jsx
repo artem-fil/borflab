@@ -3,20 +3,22 @@ import { Route, Routes, useLocation } from "react-router-dom";
 
 import NavMenu from "@components/NavMenu";
 import Splash from "@components/Splash";
+import Counter from "@screens/Counter";
+import Dashboard from "@screens/Dashboard";
+import Gallery from "@screens/Gallery";
+import Games from "@screens/Games";
+import Home from "@screens/Home";
+import Lab from "@screens/Lab";
+import Library from "@screens/Library";
+import Play from "@screens/Play";
+import Policy from "@screens/Policy";
+import Profile from "@screens/Profile";
+import Shop from "@screens/Shop";
+import Signup from "@screens/Signup";
+import Storage from "@screens/Storage";
+import Swapomat from "@screens/Swapomat";
+import Welcome from "@screens/Welcome";
 import { useEffect, useState } from "react";
-import Counter from "./screens/Counter";
-import Dashboard from "./screens/Dashboard";
-import Gallery from "./screens/Gallery";
-import Home from "./screens/Home";
-import Lab from "./screens/Lab";
-import Library from "./screens/Library";
-import Policy from "./screens/Policy";
-import Profile from "./screens/Profile";
-import Shop from "./screens/Shop";
-import Signup from "./screens/Signup";
-import Storage from "./screens/Storage";
-import Swapomat from "./screens/Swapomat";
-import Welcome from "./screens/Welcome";
 
 import api from "./api";
 import store from "./store";
@@ -107,6 +109,7 @@ export default function App() {
         "/library": "bg-[#ddcfb7]",
         "/shop": "bg-[#ddcfb7]",
         "/storage": "bg-black",
+        "/games": "bg-[#ddcfb7]",
         "/dashboard": "bg-gray-900",
     };
     const isDashboard = location.pathname === "/dashboard" || location.pathname === "/gallery";
@@ -168,11 +171,16 @@ export default function App() {
                 <Route path="/swapomat/:monsterId?" element={<Swapomat />} />
                 <Route path="/counter" element={<Counter />} />
                 <Route path="/policy" element={<Policy />} />
+                <Route path="/games" element={<Games />} />
+                <Route path="/play/:gameId" element={<Play />} />
                 <Route path="*" element={<Welcome />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/gallery" element={<Gallery />} />
             </Routes>
-            {location.pathname !== "/welcome" && location.pathname !== "/dashboard" && authenticated && <NavMenu />}
+            {location.pathname !== "/welcome" &&
+                location.pathname !== "/dashboard" &&
+                !location.pathname.startsWith("/play/") &&
+                authenticated && <NavMenu />}
         </div>
     );
 }

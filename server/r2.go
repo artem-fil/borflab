@@ -8,14 +8,22 @@ import (
 	"encoding/hex"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	_ "image/jpeg"
 	"image/png"
 	_ "image/png"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/image/draw"
+)
+
+const (
+	bboxPaddingFrac = 0.02
+	alphaThreshold  = 0x1400 // ~8%
 )
 
 type R2Client struct {
@@ -148,4 +156,147 @@ func hmacSHA256(key, data []byte) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write(data)
 	return h.Sum(nil)
+}
+
+func findBBox(img image.Image, rect image.Rectangle) (bbox image.Rectangle, found bool) {
+	minX, minY := rect.Max.X, rect.Max.Y
+	maxX, maxY := rect.Min.X, rect.Min.Y
+
+	for y := rect.Min.Y; y < rect.Max.Y; y++ {
+		for x := rect.Min.X; x < rect.Max.X; x++ {
+			_, _, _, a := img.At(x, y).RGBA()
+			if a > alphaThreshold {
+				found = true
+				if x < minX {
+					minX = x
+				}
+				if x > maxX {
+					maxX = x
+				}
+				if y < minY {
+					minY = y
+				}
+				if y > maxY {
+					maxY = y
+				}
+			}
+		}
+	}
+	if !found {
+		return image.Rectangle{}, false
+	}
+	return image.Rect(minX, minY, maxX+1, maxY+1), true
+}
+
+// padAndSquare добавляет паддинг вокруг bbox, приводит к квадрату
+// и сдвигает (не сжимает) прямоугольник так, чтобы он не выходил за frameBounds.
+func padAndSquare(bbox, frameBounds image.Rectangle) image.Rectangle {
+	padX := int(float64(bbox.Dx()) * bboxPaddingFrac)
+	padY := int(float64(bbox.Dy()) * bboxPaddingFrac)
+	r := image.Rect(bbox.Min.X-padX, bbox.Min.Y-padY, bbox.Max.X+padX, bbox.Max.Y+padY)
+
+	// клампим паддинг к границам своей трети
+	r = r.Intersect(frameBounds)
+
+	// приводим к квадрату по большей стороне, центр — центр текущего r
+	side := r.Dx()
+	if r.Dy() > side {
+		side = r.Dy()
+	}
+	cx, cy := (r.Min.X+r.Max.X)/2, (r.Min.Y+r.Max.Y)/2
+	half := side / 2
+	sq := image.Rect(cx-half, cy-half, cx-half+side, cy-half+side)
+
+	// если квадрат вылезает за frameBounds — сдвигаем целиком (не сжимаем),
+	// чтобы не обрезать монстра
+	if sq.Min.X < frameBounds.Min.X {
+		d := frameBounds.Min.X - sq.Min.X
+		sq.Min.X += d
+		sq.Max.X += d
+	}
+	if sq.Max.X > frameBounds.Max.X {
+		d := sq.Max.X - frameBounds.Max.X
+		sq.Min.X -= d
+		sq.Max.X -= d
+	}
+	if sq.Min.Y < frameBounds.Min.Y {
+		d := frameBounds.Min.Y - sq.Min.Y
+		sq.Min.Y += d
+		sq.Max.Y += d
+	}
+	if sq.Max.Y > frameBounds.Max.Y {
+		d := sq.Max.Y - frameBounds.Max.Y
+		sq.Min.Y -= d
+		sq.Max.Y -= d
+	}
+
+	// финальный кламп на случай если сторона квадрата больше самой трети целиком
+	return sq.Intersect(frameBounds)
+}
+
+func cropToRGBA(src image.Image, rect image.Rectangle) *image.RGBA {
+	dst := image.NewRGBA(image.Rect(0, 0, rect.Dx(), rect.Dy()))
+	draw.Draw(dst, dst.Bounds(), src, rect.Min, draw.Src)
+	return dst
+}
+
+// scaleNearest ресайзит в квадрат targetSize x targetSize методом ближайшего соседа —
+// единственный корректный способ для пиксель-арта, BiLinear/BiCubic размывают его в кашу.
+func scaleNearest(src image.Image, targetSize int) *image.RGBA {
+	dst := image.NewRGBA(image.Rect(0, 0, targetSize, targetSize))
+	draw.NearestNeighbor.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+	return dst
+}
+
+func encodePNG(img image.Image) []byte {
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img) // encode в память не должен фейлиться на валидном image.RGBA
+	return buf.Bytes()
+}
+
+// ── debug helpers ────────────────────────────────────────────────────────────
+
+func dumpDebugImage(img image.Image, debugDir, name string) {
+	_ = os.MkdirAll(debugDir, 0755)
+	path := filepath.Join(debugDir, name+".png")
+	f, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_ = png.Encode(f, img)
+}
+
+// dumpDebugSheet сохраняет исходный лист с нарисованными поверх bbox-рамками
+// (красная рамка = squared bbox, использованный для кропа) — удобно смотреть,
+// что именно задетектилось.
+func dumpDebugSheet(src image.Image, bboxes map[string]image.Rectangle, debugDir, tag string) {
+	_ = os.MkdirAll(debugDir, 0755)
+	b := src.Bounds()
+	dst := image.NewRGBA(b)
+	draw.Draw(dst, b, src, b.Min, draw.Src)
+
+	red := color.RGBA{255, 0, 0, 255}
+	for _, r := range bboxes {
+		drawRect(dst, r, red)
+	}
+
+	path := filepath.Join(debugDir, fmt.Sprintf("sheet_%s.png", tag))
+	f, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_ = png.Encode(f, dst)
+}
+
+func drawRect(img *image.RGBA, r image.Rectangle, c color.RGBA) {
+	for x := r.Min.X; x < r.Max.X; x++ {
+		img.Set(x, r.Min.Y, c)
+		img.Set(x, r.Max.Y-1, c)
+	}
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		img.Set(r.Min.X, y, c)
+		img.Set(r.Max.X-1, y, c)
+	}
 }

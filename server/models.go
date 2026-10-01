@@ -89,9 +89,9 @@ type Experiment struct {
 	ThumbUrl string
 
 	Specimen    json.RawMessage
-	ImageCID    string
-	MetadataCID string
-	Metadata    json.RawMessage
+	ImageCid    *string
+	MetadataCid *string
+	Metadata    NullRawMessage
 	Stone       StoneType
 	Biome       Biome
 	Rarity      Rarity
@@ -194,12 +194,14 @@ type Monster struct {
 	ExperimentId int
 
 	// === solana stuff ===
-	Signature        string
-	Slot             int64
-	MintAddress      string
+	Signature        *string
+	Slot             *int64
+	MintAddress      *string
 	OwnerAddress     *string
-	StoneMintAddress string
-	CardStateAddress string
+	StoneMintAddress *string
+	CardStateAddress *string
+	MintStatus       string
+	MintRetries      int
 
 	// === profile ===
 	Name          string
@@ -223,17 +225,23 @@ type Monster struct {
 	Status string
 
 	// === metadata ===
-	MetadataUri string
-	ImageCid    string
+	MetadataUri *string
+	ImageCid    *string
 
 	// === images ===
 	InputUrl *string
 	ImageUrl *string
 	ThumbUrl *string
-	// Sprites stores a map of sprite pose names to their CID/URL, populated asynchronously
-	Sprites map[string]string `json:"sprites,omitempty"`
 
-	Minted  time.Time
+	SpriteStatus    string
+	SpriteRetries   int
+	SpriteUpdated   time.Time
+	SpriteIdleUrl   *string
+	SpriteWalkUrl   *string
+	SpriteHitUrl    *string
+	SpriteAvatarUrl *string
+
+	Minted  *time.Time
 	Created time.Time
 }
 

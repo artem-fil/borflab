@@ -8,11 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	_ "image/png"
 	"io"
 	"log"
 	"math/rand"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,14 +35,17 @@ import (
 
 const (
 	OPENAI_COMPLETION_URL     = "https://api.openai.com/v1/chat/completions"
+	OPENAI_EDITS_URL          = "https://api.openai.com/v1/images/edits"
 	OPENAI_GENERATION_URL     = "https://api.openai.com/v1/images/generations"
 	PINATA_PIN_FILE_URL       = "https://api.pinata.cloud/pinning/pinFileToIPFS"
 	TOKEN_METADATA_PROGRAM_ID = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
 	R2_ENDPOINT               = "https://62957615d09dddc1af2ae1c5423e6632.r2.cloudflarestorage.com"
 	AVG_ANALYZE_TIME          = 13 // OpenAI vision call (gpt-4o)
-	AVG_GENERATE_TIME         = 37 // OpenAI image generation (gpt-image-1.5)
+	AVG_GENERATE_TIME         = 20 // OpenAI image generation (gpt-image-1.5)
 	AVG_UPLOAD_TIME           = 7  // Pinata: image + metadata
 	AVG_MINT_TIME             = 17 // Solana tx confirmation (используется как таймаут-хинт)
+	spriteInlineMaxAttempts   = 3
+	spriteInlineBackoffBase   = 3 * time.Second // attempt N waits base * N
 )
 
 var (
@@ -698,6 +705,12 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		return
 	}
 
+	userPubKey := r.FormValue("userPubKey")
+	if userPubKey == "" {
+		a.BadRequestError(w, fmt.Errorf("userPubKey is required"))
+		return
+	}
+
 	imgFile, _, err := r.FormFile("file")
 	if err != nil {
 		a.InternalError(w, err)
@@ -718,7 +731,7 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		return
 	}
 
-	// storageImg, err := ResizeJPEG(imgBytes, 400)
+	storageImg, err := ResizeJPEG(imgBytes, 400)
 	if err != nil {
 		a.InternalError(w, err)
 		return
@@ -732,12 +745,11 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 
 	expUUID := uuid.NewString()
 	inputKey := fmt.Sprintf("monsters/%s/input.jpg", expUUID)
-	/*
-		if err := a.r2.Upload(r.Context(), inputKey, "image/jpeg", storageImg); err != nil {
-			a.InternalError(w, fmt.Errorf("cannot upload input to r2: %w", err))
-			return
-		}
-	*/
+
+	if err := a.r2.Upload(r.Context(), inputKey, "image/jpeg", storageImg); err != nil {
+		a.InternalError(w, fmt.Errorf("cannot upload input to r2: %w", err))
+		return
+	}
 
 	experiment := &Experiment{
 		UUID:        expUUID,
@@ -756,12 +768,12 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 		return
 	}
 
-	go a.processImage(taskID, analysisImg, insertedExperiment)
+	go a.processImage(taskID, analysisImg, insertedExperiment, userPubKey)
 
 	w.Send(struct{ Id string }{Id: taskID})
 }
 
-func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experiment) {
+func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experiment, userPubKey string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -795,8 +807,6 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	}
 	prompt := fmt.Sprintf(biomePrompt, stonePrompt)
 	experiment.PromptAnalyzeUsed = prompt
-
-	ts.SetProgress(P.Analyzed)
 
 	// ── build OpenAI request ──────────────────────────────────────────────────
 
@@ -924,14 +934,15 @@ func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experimen
 	nextTs.SetProgress(50)
 	tasks.Store(nextTaskId, nextTs)
 	time.AfterFunc(10*time.Minute, func() { tasks.Delete(nextTaskId) })
-	go a.generateImage(nextTaskId, parsed, *experiment)
+	go a.generateImage(nextTaskId, parsed, *experiment, userPubKey)
 
 	parsed["rarity"] = experiment.Rarity
 
 	ts.Finish(parsed, nextTaskId)
 }
 
-func (a *api) generateImage(taskId string, specimen map[string]any, experiment Experiment) {
+func (a *api) generateImage(taskId string, specimen map[string]any, experiment Experiment, userPubKey string) {
+
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -988,28 +999,25 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	abilities := getProfileField(profile, "abilities")
 	habitat := getProfileField(profile, "habitat")
 	h, w := randomSize(experiment.Stone, experiment.Biome)
-	height := strconv.Itoa(h)
-	weight := strconv.Itoa(w)
+	heightInt := h
+	weightInt := w
 
 	p := GetActivePrompt()
 	prompt := fmt.Sprintf("%s.\n %s", renderDirective, p.PromptGeneration[experiment.Biome])
 	experiment.PromptGenerationUsed = prompt
 
-	quality := experiment.Quality
-	if quality == "" {
-		quality = "high"
-	}
-	size := experiment.Size
-	if size == "" {
-		size = "1024x1024"
-	}
-
 	// ── build OpenAI image request ────────────────────────────────────────────
+	var quality string
+	if a.cfg.Environment == "dev" {
+		quality = "low"
+	} else {
+		quality = "medium"
+	}
 
 	requestBody := map[string]any{
 		"model":      "gpt-image-1.5",
 		"n":          1,
-		"size":       size,
+		"size":       "1024x1024",
 		"quality":    quality,
 		"prompt":     prompt,
 		"moderation": "low",
@@ -1076,99 +1084,36 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	ts.SetProgress(P.Generated)
 	ts.SetStage(P.Generated, P.Finished, AVG_UPLOAD_TIME)
 
-	/*
-		imageBytes, err := base64.StdEncoding.DecodeString(base64Image)
-		if err != nil {
-			fail("cannot decode base64 image", err)
-			return
-		}
-	*/
+	imageBytes, err := base64.StdEncoding.DecodeString(base64Image)
+	if err != nil {
+		fail("cannot decode base64 image", err)
+		return
+	}
 
-	// thumbBytes, err := ResizePNG(imageBytes, 400)
+	thumbBytes, err := ResizePNG(imageBytes, 400)
 	if err != nil {
 		fail("cannot resize thumb", err)
 		return
 	}
 
-	type pinataResult struct {
-		cid string
-		err error
-	}
-	pinataCh := make(chan pinataResult, 1)
-	go func() {
-		cid, err := uploadImageToPinata(a.cfg.Pinata.PinataToken, base64Image, name)
-		pinataCh <- pinataResult{cid, err}
-	}()
-
 	imageKey := fmt.Sprintf("monsters/%s/image.png", experiment.UUID)
 	thumbKey := fmt.Sprintf("monsters/%s/thumb.png", experiment.UUID)
 
-	/*
-		if err = a.r2.Upload(ctx, imageKey, "image/png", imageBytes); err != nil {
-			fail("cannot upload image to r2", err)
-			return
-		}
-		if err = a.r2.Upload(ctx, thumbKey, "image/png", thumbBytes); err != nil {
-			fail("cannot upload thumb to r2", err)
-			return
-		}
-	*/
+	if err = a.r2.Upload(ctx, imageKey, "image/png", imageBytes); err != nil {
+		fail("cannot upload image to r2", err)
+		return
+	}
+	if err = a.r2.Upload(ctx, thumbKey, "image/png", thumbBytes); err != nil {
+		fail("cannot upload thumb to r2", err)
+		return
+	}
 
 	experiment.ImageUrl = a.r2.URL(imageKey)
 	experiment.ThumbUrl = a.r2.URL(thumbKey)
 
-	pr := <-pinataCh
-	if pr.err != nil {
-		fail("cannot upload image to ipfs", pr.err)
-		return
-	}
-
-	metadataBody := map[string]any{
-		"name":                    name,
-		"symbol":                  "MON",
-		"description":             "d",
-		"image":                   fmt.Sprintf("ipfs://%s", pr.cid),
-		"external_url":            "https://borflab.com/library",
-		"seller_fee_basis_points": 0,
-		"attributes": []any{
-			map[string]string{"trait_type": "Biome", "value": string(experiment.Biome)},
-			map[string]string{"trait_type": "Rarity", "value": string(experiment.Rarity)},
-			map[string]string{"trait_type": "Stone", "value": string(experiment.Stone)},
-		},
-		"properties": map[string]any{
-			"category":       "image",
-			"files":          []map[string]any{{"uri": fmt.Sprintf("ipfs://%s", pr.cid), "type": "image/png"}},
-			"creators":       []map[string]any{{"address": "dghfghgfh", "share": 100, "verified": true}},
-			"species":        species,
-			"lore":           lore,
-			"weight":         weight,
-			"height":         height,
-			"movement_class": movementClass,
-			"behaviour":      behaviour,
-			"personality":    personality,
-			"abilities":      abilities,
-			"habitat":        habitat,
-		},
-	}
-
-	metadataCid, err := uploadMetadataToPinata(a.cfg.Pinata.PinataToken, metadataBody)
-	if err != nil {
-		fail("cannot upload metadata", err)
-		return
-	}
-
-	metadata, err := json.Marshal(metadataBody)
-	if err != nil {
-		fail("cannot marshal metadata", err)
-		return
-	}
-
 	ts.SetProgress(P.Uploaded)
 
 	uploaded := time.Now().UTC()
-	experiment.ImageCID = pr.cid
-	experiment.MetadataCID = metadataCid
-	experiment.Metadata = metadata
 	experiment.Generated = &generated
 	experiment.Uploaded = &uploaded
 
@@ -1177,53 +1122,180 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		experiment.Cost = experiment.TokensUsed.TotalCost()
 	}
 
-	if _, err := a.db.FinishExperiment(context.Background(), &experiment); err != nil {
+	if _, err := a.db.UpdateExperiment(context.Background(), &experiment); err != nil {
 		fail("cannot update experiment", err)
 		return
 	}
 
+	// ── CREATE MONSTER IN DB & TRIGGER BACKGROUND WORKERS ─────────────────────
+	txDB, err := a.db.Conn.BeginTx(ctx, nil)
+	if err != nil {
+		fail("cannot start db transaction", err)
+		return
+	}
+	defer txDB.Rollback()
+
+	globalSerial, byStoneSerial, byBiomeSerial, err := a.db.NextSerials(ctx, txDB, experiment.Stone, experiment.Biome)
+	if err != nil {
+		fail("cannot get serials", err)
+		return
+	}
+
+	monster := &Monster{
+		ExperimentId:  experiment.Id,
+		UserId:        experiment.UserId,
+		OwnerAddress:  &userPubKey,
+		Name:          name,
+		Species:       species,
+		Lore:          lore,
+		Height:        heightInt,
+		Weight:        weightInt,
+		MovementClass: movementClass,
+		Behaviour:     behaviour,
+		Personality:   personality,
+		Abilities:     abilities,
+		InputUrl:      &experiment.InputUrl,
+		ImageUrl:      &experiment.ImageUrl,
+		ThumbUrl:      &experiment.ThumbUrl,
+		Habitat:       habitat,
+		Biome:         experiment.Biome,
+		Rarity:        experiment.Rarity,
+		Stone:         experiment.Stone,
+		SerialNumber:  globalSerial,
+		SerialStone:   byStoneSerial,
+		SerialBiome:   byBiomeSerial,
+		Generation:    1,
+		Status:        "active",
+	}
+
+	if err := a.db.DecreaseStoneSparksTx(ctx, txDB, monster); err != nil {
+		fail("cannot decrease stone sparks", err)
+		return
+	}
+
+	if err := a.db.InsertMonsterTx(ctx, txDB, monster); err != nil {
+		fail("cannot save monster to database", err)
+		return
+	}
+
+	if err := txDB.Commit(); err != nil {
+		fail("cannot commit db transaction", err)
+		return
+	}
+
+	a.telegram.SendMessage(
+		PubChannel,
+		"New monster %s has been created.\nBiome: %s\nRarity: %s\nStone: %s",
+		monster.Name,
+		monster.Biome,
+		monster.Rarity,
+		monster.Stone,
+	)
+
+	go a.mintNFT(monster.Id, base64Image)
+	go a.generateSpritesheet(monster.Id, imageBytes)
+
 	ts.Finish(map[string]any{
 		"image":        experiment.ThumbUrl,
 		"experimentId": experiment.Id,
+		"monsterId":    monster.Id,
 	}, "")
 }
 
-func (a *api) MintMonster(w *Responder, r *http.Request) {
-	ctx := r.Context()
-	solanaCtx, solanaCancel := context.WithTimeout(context.Background(), 40*time.Second)
-	defer solanaCancel()
-	experimentId := Param(r)
+func (a *api) mintNFT(monsterId int, base64Image string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
-	form := &mintMonsterForm{}
-	if err := ParseBody(r, &form); err != nil {
-		a.BadRequestError(w, err)
-		return
-	}
-
-	experiment, err := a.db.SelectExperiment(ctx, experimentId)
+	monster, err := a.db.SelectMonsterById(ctx, monsterId)
 	if err != nil {
-		a.DbError(w, fmt.Errorf("cannot select experiment %v", err))
+		LogError("API", fmt.Sprintf("cannot fetch monster %d from db", monsterId), err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
 
-	var parsed map[string]any
-	if err := json.Unmarshal(experiment.Specimen, &parsed); err != nil {
-		a.InternalError(w, fmt.Errorf("cannot unmarshal specimen: %v", err))
-		return
-	}
-	monsterProfile, ok := parsed["MONSTER_PROFILE"].(map[string]any)
-	if !ok {
-		// Обработка ошибки, если MONSTER_PROFILE не является map
-		a.InternalError(w, fmt.Errorf("MONSTER_PROFILE is not a map"))
+	if monster.OwnerAddress == nil || *monster.OwnerAddress == "" {
+		LogError("API", fmt.Sprintf("monster %d has no owner address", monsterId), nil)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
 
-	uri := fmt.Sprintf("ipfs://%s", experiment.MetadataCID)
-	user_id := 12345
-	experiment_id := experiment.Id
+	experiment, err := a.db.SelectExperiment(ctx, strconv.Itoa(monster.ExperimentId))
+	if err != nil {
+		LogError("API", fmt.Sprintf("cannot fetch experiment for monster %d", monsterId), err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
+		return
+	}
 
+	// 1. Upload image to Pinata
+	imageCid, err := uploadImageToPinata(a.cfg.Pinata.PinataToken, base64Image, monster.Name)
+	if err != nil {
+		LogError("API", fmt.Sprintf("cannot upload image to ipfs for monster %d", monsterId), err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
+		return
+	}
+
+	// 2. Build metadata & upload to Pinata
+	metadataBody := map[string]any{
+		"name":                    monster.Name,
+		"symbol":                  "MON",
+		"description":             "d",
+		"image":                   fmt.Sprintf("ipfs://%s", imageCid),
+		"external_url":            "https://borflab.com/library",
+		"seller_fee_basis_points": 0,
+		"attributes": []any{
+			map[string]string{"trait_type": "Biome", "value": string(monster.Biome)},
+			map[string]string{"trait_type": "Rarity", "value": string(monster.Rarity)},
+			map[string]string{"trait_type": "Stone", "value": string(monster.Stone)},
+		},
+		"properties": map[string]any{
+			"category":       "image",
+			"files":          []map[string]any{{"uri": fmt.Sprintf("ipfs://%s", imageCid), "type": "image/png"}},
+			"creators":       []map[string]any{{"address": "dghfghgfh", "share": 100, "verified": true}},
+			"species":        monster.Species,
+			"lore":           monster.Lore,
+			"weight":         strconv.Itoa(monster.Weight),
+			"height":         strconv.Itoa(monster.Height),
+			"movement_class": monster.MovementClass,
+			"behaviour":      monster.Behaviour,
+			"personality":    monster.Personality,
+			"abilities":      monster.Abilities,
+			"habitat":        monster.Habitat,
+		},
+	}
+
+	metadataCid, err := uploadMetadataToPinata(a.cfg.Pinata.PinataToken, metadataBody)
+	if err != nil {
+		LogError("API", fmt.Sprintf("cannot upload metadata for monster %d", monsterId), err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
+		return
+	}
+
+	metadataBytes, err := json.Marshal(metadataBody)
+	if err != nil {
+		LogError("API", fmt.Sprintf("cannot marshal metadata for monster %d", monsterId), err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
+		return
+	}
+
+	uri := fmt.Sprintf("ipfs://%s", metadataCid)
+
+	// Update DB records with CIDs and Metadata
+	monster.ImageCid = &imageCid
+	monster.MetadataUri = &uri
+	if err := a.db.UpdateMonsterCids(ctx, monster.Id, imageCid, uri); err != nil {
+		LogError("API", fmt.Sprintf("cannot update monster CIDs in DB for %d", monsterId), err)
+	}
+
+	experiment.ImageCid = &imageCid
+	experiment.MetadataCid = &metadataCid
+	experiment.Metadata = metadataBytes
+	if _, err := a.db.FinishExperiment(ctx, experiment); err != nil {
+		LogError("API", fmt.Sprintf("cannot update experiment CIDs in DB for %d", monsterId), err)
+	}
+
+	// 3. Solana transaction construction
 	programId := solana.MustPublicKeyFromBase58(a.cfg.Solana.ProgramId)
-	userPubKey := solana.MustPublicKeyFromBase58(form.UserPubKey)
+	userPubKey := solana.MustPublicKeyFromBase58(*monster.OwnerAddress)
 	cardCollectionPubKey := solana.MustPublicKeyFromBase58(a.cfg.Solana.CardCollectionPubKey)
 	tokenMetadataProgramId := solana.MustPublicKeyFromBase58(TOKEN_METADATA_PROGRAM_ID)
 
@@ -1232,26 +1304,23 @@ func (a *api) MintMonster(w *Responder, r *http.Request) {
 
 	adminPrivateKey := solana.PrivateKey(a.cfg.Solana.SecretKey)
 	if err := adminPrivateKey.Validate(); err != nil {
-		a.InternalError(w, fmt.Errorf("invalid admin key"))
+		LogError("API", "invalid admin key", err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
 
-	rpcCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	adminAccount, err := a.rpcClient.GetAccountInfoWithOpts(rpcCtx, cardMintAdminPda,
+	adminAccount, err := a.rpcClient.GetAccountInfoWithOpts(ctx, cardMintAdminPda,
 		&rpc.GetAccountInfoOpts{Commitment: rpc.CommitmentConfirmed})
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot get admin account: %v", err))
+	if err != nil || adminAccount == nil || adminAccount.Value == nil || len(adminAccount.Value.Data.GetBinary()) < 32 {
+		LogError("API", fmt.Sprintf("cannot validate admin account for monster %d", monsterId), err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
-	if adminAccount == nil || adminAccount.Value == nil || len(adminAccount.Value.Data.GetBinary()) < 32 {
-		a.InternalError(w, fmt.Errorf("cannot validate admin account: %v", err))
-		return
-	}
+
 	registeredAdmin := solana.PublicKeyFromBytes(adminAccount.GetBinary()[8:40])
 	if !registeredAdmin.Equals(adminPrivateKey.PublicKey()) {
-		a.InternalError(w, fmt.Errorf("unauthorized admin keypair"))
+		LogError("API", "unauthorized admin keypair", nil)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
 
@@ -1270,9 +1339,10 @@ func (a *api) MintMonster(w *Responder, r *http.Request) {
 	borflabVaultPda, _, _ := solana.FindProgramAddress([][]byte{[]byte("borflab_vault")}, programId)
 	borflabVaultAta, _, _ := solana.FindAssociatedTokenAddress(borflabVaultPda, mintPubKey)
 
-	mintRent, err := a.rpcClient.GetMinimumBalanceForRentExemption(solanaCtx, 82, rpc.CommitmentConfirmed)
+	mintRent, err := a.rpcClient.GetMinimumBalanceForRentExemption(ctx, 82, rpc.CommitmentConfirmed)
 	if err != nil {
-		a.InternalError(w, err)
+		LogError("MintWorker", "cannot get rent exemption", err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
 
@@ -1304,16 +1374,17 @@ func (a *api) MintMonster(w *Responder, r *http.Request) {
 			solana.NewAccountMeta(tokenMetadataProgramId, false, false),
 			solana.NewAccountMeta(solana.SysVarRentPubkey, false, false),
 		},
-		encodeMintSparkCardInstanceData(uri, user_id, experiment_id),
+		encodeMintSparkCardInstanceData(uri, 12345, experiment.Id),
 	)
 
 	createMintAccountIx := system.NewCreateAccountInstruction(
 		mintRent, 82, solana.TokenProgramID, adminPrivateKey.PublicKey(), mintPubKey).Build()
 	computeBudgetIx := computebudget.NewSetComputeUnitLimitInstruction(400000).Build()
 
-	recent, err := a.rpcClient.GetLatestBlockhash(solanaCtx, rpc.CommitmentFinalized)
+	recent, err := a.rpcClient.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
 	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot get latest blockhash: %v", err))
+		LogError("API", "cannot get latest blockhash", err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
 
@@ -1323,7 +1394,8 @@ func (a *api) MintMonster(w *Responder, r *http.Request) {
 		solana.TransactionPayer(adminPrivateKey.PublicKey()),
 	)
 	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot create transaction: %v", err))
+		LogError("API", "cannot create transaction", err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
 
@@ -1338,169 +1410,258 @@ func (a *api) MintMonster(w *Responder, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot sign transaction: %v", err))
+		LogError("API", "cannot sign transaction", err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
 
-	weight := 300
-	height := 200
-
-	ownerAddress := form.UserPubKey
-
-	txDB, err := a.db.Conn.BeginTx(ctx, nil)
+	// 4. Send transaction to Solana
+	sig, err := a.rpcClient.SendTransaction(ctx, tx)
 	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot start db transaction: %v", err))
-		return
-	}
-	defer txDB.Rollback()
-
-	monsterForSpark := &Monster{
-		ExperimentId: experiment.Id,
-		Stone:        experiment.Stone,
-		OwnerAddress: &ownerAddress,
-	}
-	if err := a.db.DecreaseStoneSparksTx(ctx, txDB, monsterForSpark); err != nil {
-		a.InternalError(w, fmt.Errorf("cannot decrease stone sparks: %v", err))
-		return
-	}
-
-	// 2. Получаем серийные номера
-	global, byStone, byBiome, err := a.db.NextSerials(ctx, txDB, experiment.Stone, experiment.Biome)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("cannot get serials: %v", err))
-		return
-	}
-
-	monster := &Monster{
-		ExperimentId:  experiment.Id,
-		MintAddress:   mintPubKey.String(),
-		OwnerAddress:  &ownerAddress,
-		Name:          monsterProfile["name"].(string),
-		Species:       monsterProfile["species"].(string),
-		Lore:          monsterProfile["lore"].(string),
-		Height:        height,
-		Weight:        weight,
-		MovementClass: monsterProfile["movement_class"].(string),
-		Behaviour:     monsterProfile["behaviour"].(string),
-		Personality:   monsterProfile["personality"].(string),
-		Abilities:     monsterProfile["abilities"].(string),
-		Habitat:       monsterProfile["habitat"].(string),
-		Biome:         experiment.Biome,
-		Rarity:        experiment.Rarity,
-		Stone:         experiment.Stone,
-		SerialNumber:  global,
-		SerialStone:   byStone,
-		SerialBiome:   byBiome,
-		Generation:    1,
-		Status:        "pending",
-		MetadataUri:   uri,
-		ImageCid:      experiment.MetadataCID,
-		Minted:        time.Now().UTC(),
-	}
-
-	// Сохраняем монстра в БД
-	if err := a.db.InsertMonsterTx(ctx, txDB, monster); err != nil {
-		a.InternalError(w, fmt.Errorf("cannot save monster to database: %v", err))
-		return
-	}
-
-	// Коммитим транзакцию
-	if err := txDB.Commit(); err != nil {
-		a.InternalError(w, fmt.Errorf("cannot commit db transaction: %v", err))
-		return
-	}
-
-	a.telegram.SendMessage(
-		PubChannel,
-		"New monster %s has been inserted into DB.\nBiome: %s\nRarity: %s\nStone: %s",
-		monster.Name,
-		monster.Biome,
-		monster.Rarity,
-		monster.Stone,
-	)
-
-	sig, err := a.rpcClient.SendTransaction(solanaCtx, tx)
-	if err != nil {
-		a.InternalError(w, fmt.Errorf("failed to send transaction: %v", err))
+		LogError("API", fmt.Sprintf("failed to send transaction for monster %d", monsterId), err)
+		_ = a.db.IncrementMintRetry(ctx, monsterId, "failed")
 		return
 	}
 
 	LogInfo("API", fmt.Sprintf("Transaction sent: %s", sig.String()))
-
-	// Mark pending immediately so the first client poll doesn't get a 404.
-	expIdStr := strconv.Itoa(experiment.Id)
-	mintStatuses.Store(expIdStr, &MintStatus{Status: "pending", Signature: sig.String()})
-
-	// Track confirmation in the background; client polls /mint/{expId}/status.
-	go a.trackMintConfirmation(expIdStr, sig)
-
-	w.Send(struct {
-		Signature string `json:"signature"`
-	}{Signature: sig.String()})
 }
 
-func (a *api) trackMintConfirmation(experimentId string, sig solana.Signature) {
+func (a *api) generateSpritesheet(monsterId int, initialThumbBytes []byte) {
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	expId, err := strconv.Atoi(experimentId)
-	if err != nil {
-		LogError("Mint", "Invalid experiment id in trackMintConfirmation", err)
-		mintStatuses.Store(experimentId, &MintStatus{
-			Status: "failed",
-			Error:  fmt.Sprintf("invalid experiment id: %s", experimentId),
-		})
+	if err := a.db.UpdateMonsterSpriteStatus(ctx, monsterId, "processing"); err != nil {
+		LogError("SpriteWorker", fmt.Sprintf("cannot set processing status for monster %d", monsterId), err)
 		return
 	}
 
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
+	monster, err := a.db.SelectMonsterById(ctx, monsterId)
+	if err != nil {
+		LogError("SpriteWorker", fmt.Sprintf("cannot fetch monster %d", monsterId), err)
+		a.failSprite(ctx, monsterId)
+		return
+	}
 
-	for {
+	experiment, err := a.db.SelectExperiment(ctx, strconv.Itoa(monster.ExperimentId))
+	if err != nil {
+		LogError("SpriteWorker", fmt.Sprintf("cannot fetch experiment for monster %d", monsterId), err)
+		a.failSprite(ctx, monsterId)
+		return
+	}
+
+	thumbBytes := initialThumbBytes
+	if len(thumbBytes) == 0 {
+		if experiment.ThumbUrl == "" {
+			LogError("SpriteWorker", fmt.Sprintf("monster %d has no thumb url", monsterId), nil)
+			a.failSprite(ctx, monsterId)
+			return
+		}
+		thumbBytes, err = downloadFile(ctx, experiment.ThumbUrl)
+		if err != nil {
+			LogError("SpriteWorker", "cannot download thumb image from r2", err)
+			a.failSprite(ctx, monsterId)
+			return
+		}
+	}
+
+	spriteSheetBytes, err := a.requestSpriteSheetWithRetries(ctx, thumbBytes, monsterId)
+	if err != nil {
+		LogError("SpriteWorker", "openai generation failed after retries", err)
+		a.failSprite(ctx, monsterId)
+		return
+	}
+
+	debugDir := ""
+	if a.cfg.Environment == "dev" {
+		debugDir = filepath.Join(os.TempDir(), "sprite-debug", experiment.UUID)
+		if err := os.MkdirAll(debugDir, 0755); err == nil {
+			_ = os.WriteFile(filepath.Join(debugDir, "raw_sheet.png"), spriteSheetBytes, 0644)
+		} else {
+			LogError("SpriteWorker", "cannot create debug dir", err)
+		}
+	}
+
+	sprites, err := processAndCropSprites(spriteSheetBytes, 128, debugDir)
+	if err != nil {
+		LogError("SpriteWorker", "cannot crop sprites", err)
+		a.failSprite(ctx, monsterId)
+		return
+	}
+
+	idleKey := fmt.Sprintf("monsters/%s/sprites/idle.png", experiment.UUID)
+	walkKey := fmt.Sprintf("monsters/%s/sprites/walk.png", experiment.UUID)
+	hitKey := fmt.Sprintf("monsters/%s/sprites/hit.png", experiment.UUID)
+	avatarKey := fmt.Sprintf("monsters/%s/sprites/avatar.png", experiment.UUID)
+
+	if err := a.r2.Upload(ctx, idleKey, "image/png", sprites.Idle); err != nil {
+		LogError("SpriteWorker", "failed to upload idle sprite", err)
+		a.failSprite(ctx, monsterId)
+		return
+	}
+	if err := a.r2.Upload(ctx, walkKey, "image/png", sprites.Walk); err != nil {
+		LogError("SpriteWorker", "failed to upload walk sprite", err)
+		a.failSprite(ctx, monsterId)
+		return
+	}
+	if err := a.r2.Upload(ctx, hitKey, "image/png", sprites.Hit); err != nil {
+		LogError("SpriteWorker", "failed to upload hit sprite", err)
+		a.failSprite(ctx, monsterId)
+		return
+	}
+	if err := a.r2.Upload(ctx, avatarKey, "image/png", sprites.Avatar); err != nil {
+		LogError("SpriteWorker", "failed to upload avatar sprite", err)
+		a.failSprite(ctx, monsterId)
+		return
+	}
+
+	idleUrl := a.r2.URL(idleKey)
+	walkUrl := a.r2.URL(walkKey)
+	hitUrl := a.r2.URL(hitKey)
+	avatarUrl := a.r2.URL(avatarKey)
+
+	// NOTE: UpdateMonsterSpritesSuccess's SET clause should include
+	// `sprite_updated = now()` alongside sprite_status = 'ready'.
+	if err := a.db.UpdateMonsterSpritesSuccess(ctx, monsterId, idleUrl, walkUrl, hitUrl, avatarUrl); err != nil {
+		LogError("SpriteWorker", fmt.Sprintf("cannot update sprite status for monster %d", monsterId), err)
+		return
+	}
+
+	LogInfo("SpriteWorker", fmt.Sprintf("Successfully processed sprites for monster %d", monsterId))
+}
+
+func (a *api) requestSpriteSheet(ctx context.Context, thumbBytes []byte) ([]byte, error) {
+	prompt := `You job is to convert the monster in the supplied image into a retro 32-bit-style pixel art on a transparent background. Important is to stay true to the original monster so it is 100% recognisable. Do not add any features.
+Preserve its appearance, anatomy, proportions, colours and distinctive features.
+Output is a spritesheet containing exactly 3 frames of equal width, arranged left to right with no overlap between frames.
+Left to right:
+1-IDLE — front-facing, visibly crouched low, body lowered, feet spread wider, ready to dodge.
+2-MOVE — the monster is jumping in the left direction.
+3-HIT — sitting on the ground, knocked out, visibly dizzy.
+ 
+Technical requirements:
+- Do not add text labels, borders, or frame dividers.
+- Background must be fully transparent (alpha channel), not white or checkered.
+- Each frame's canvas third must contain nothing but the monster — no ground line, no shadow, no props, no scenery, no text labels.
+- Center the monster within each frame's third, both horizontally and vertically, with roughly equal empty margin on all sides.
+- Keep the monster at the same scale (same maximum height in pixels) across all 3 frames.
+- Make each pose clearly distinguishable by silhouette, even at small size.
+- No text, props, scenery or added anatomical features.
+`
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	fields := map[string]string{
+		"model":         "gpt-image-1.5",
+		"prompt":        prompt,
+		"n":             "1",
+		"size":          "1536x1024",
+		"background":    "transparent",
+		"output_format": "png",
+	}
+	for k, v := range fields {
+		if err := writer.WriteField(k, v); err != nil {
+			return nil, fmt.Errorf("cannot write %s field: %w", k, err)
+		}
+	}
+
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="image"; filename="thumb.png"`)
+	h.Set("Content-Type", "image/png")
+
+	part, err := writer.CreatePart(h)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create form part: %w", err)
+	}
+	if _, err := part.Write(thumbBytes); err != nil {
+		return nil, fmt.Errorf("cannot write image bytes: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("cannot close multipart writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, OPENAI_EDITS_URL, body)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+a.cfg.OpenAIToken)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read openai response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openai generation failed: status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var parsedResp struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &parsedResp); err != nil || len(parsedResp.Data) == 0 {
+		return nil, fmt.Errorf("invalid openai image response: %w", err)
+	}
+
+	return base64.StdEncoding.DecodeString(parsedResp.Data[0].B64JSON)
+}
+
+// requestSpriteSheetWithRetries retries transient OpenAI failures inline
+// (timeouts, 5xx, rate limits) before giving up for this invocation. A
+// non-transient failure (e.g. bad thumb bytes) will just fail the same way
+// on every attempt and burn through the budget quickly, which is fine.
+func (a *api) requestSpriteSheetWithRetries(ctx context.Context, thumbBytes []byte, monsterId int) ([]byte, error) {
+	var lastErr error
+	for attempt := 1; attempt <= spriteInlineMaxAttempts; attempt++ {
+		sheet, err := a.requestSpriteSheet(ctx, thumbBytes)
+		if err == nil {
+			return sheet, nil
+		}
+		lastErr = err
+		LogError("SpriteWorker", fmt.Sprintf("attempt %d/%d failed for monster %d", attempt, spriteInlineMaxAttempts, monsterId), err)
+
+		if attempt == spriteInlineMaxAttempts {
+			break
+		}
 		select {
 		case <-ctx.Done():
-			mintStatuses.Store(experimentId, &MintStatus{
-				Status: "failed",
-				Error:  "confirmation timeout",
-			})
-
-			if err := a.db.UpdateMonsterStatus(context.Background(), expId, "failed"); err != nil {
-				LogError("Mint", "Failed to update monster status to failed", err)
-			}
-			return
-
-		case <-ticker.C:
-			statuses, err := a.rpcClient.GetSignatureStatuses(ctx, false, sig)
-			if err != nil || statuses == nil || len(statuses.Value) == 0 || statuses.Value[0] == nil {
-				// transient RPC hiccup – just wait for next tick
-				continue
-			}
-
-			result := statuses.Value[0]
-
-			if result.Err != nil {
-				mintStatuses.Store(experimentId, &MintStatus{
-					Status: "failed",
-					Error:  fmt.Sprintf("chain error: %v", result.Err),
-				})
-				if err := a.db.UpdateMonsterStatus(context.Background(), expId, "failed"); err != nil {
-					LogError("Mint", "Failed to update monster status to failed", err)
-				}
-				return
-			}
-
-			confirmed := result.ConfirmationStatus == rpc.ConfirmationStatusConfirmed ||
-				result.ConfirmationStatus == rpc.ConfirmationStatusFinalized
-
-			if confirmed {
-				mintStatuses.Store(experimentId, &MintStatus{
-					Status:    "confirmed",
-					Signature: sig.String(),
-				})
-				return
-			}
-			// still processing (processed / nil) – next tick
+			return nil, ctx.Err()
+		case <-time.After(spriteInlineBackoffBase * time.Duration(attempt)):
 		}
+	}
+	return nil, lastErr
+}
+
+func (a *api) failSprite(ctx context.Context, monsterId int) {
+	if err := a.db.IncrementSpriteRetry(ctx, monsterId, "failed"); err != nil {
+		LogError("SpriteWorker", fmt.Sprintf("cannot record sprite failure for monster %d", monsterId), err)
+		return
+	}
+
+	monster, err := a.db.SelectMonsterById(ctx, monsterId)
+	if err != nil {
+		LogError("SpriteWorker", fmt.Sprintf("cannot refetch monster %d after failure", monsterId), err)
+		return
+	}
+
+	if monster.SpriteRetries >= MaxSpriteRetries {
+		// InternalOpsChannel: new const alongside the existing PubChannel,
+		// pointed at a private/ops Telegram chat — this alert is not for players.
+		a.telegram.SendMessage(
+			DevChannel,
+			"Sprite generation permanently failed for monster %d after %d attempts. Needs manual look.",
+			monsterId,
+			monster.SpriteRetries,
+		)
 	}
 }
 
@@ -1578,8 +1739,7 @@ func (a *api) SwapMonster(w *Responder, r *http.Request) {
 		a.DbError(w, err)
 		return
 	}
-
-	monsterCardMint, err := solana.PublicKeyFromBase58(monster.MintAddress)
+	monsterCardMint, err := solana.PublicKeyFromBase58(*monster.MintAddress)
 	if err != nil {
 		a.InternalError(w, fmt.Errorf("invalid monster public key: %v", err))
 		return
@@ -2063,7 +2223,7 @@ func (a *api) GenerateTest(w *Responder, r *http.Request) {
 
 	quality := r.FormValue("quality")
 	if quality == "" {
-		quality = "medium"
+		quality = "low"
 	}
 
 	size := r.FormValue("size")
@@ -2131,7 +2291,7 @@ func (a *api) GenerateTest(w *Responder, r *http.Request) {
 		return
 	}
 
-	go a.processImage(taskID, analysisImg, insertedExperiment)
+	go a.processImage(taskID, analysisImg, insertedExperiment, "dfgdfg")
 
 	w.Send(struct{ Id string }{Id: taskID})
 }

@@ -11,6 +11,10 @@ import ruby from "@images/ruby.png";
 import sapphire from "@images/sapphire.png";
 import topaz from "@images/topaz.png";
 
+import bonappetit from "@images/bonappetit.jpg";
+import munchkinkombat from "@images/munchkinkombat.jpg";
+import needforfeed from "@images/needforfeed.jpg";
+
 export const STONES = {
     Agate: {
         image: agate,
@@ -141,3 +145,28 @@ export const PRODUCTS = {
     pack10: pack10,
     pack25: pack25,
 };
+
+export const GAMES = [
+    {
+        id: "dodge",
+        name: "Bon Appetit",
+        image: bonappetit,
+        description: "Dodge the bombs, grab the fruit.",
+        active: true,
+    },
+    {
+        id: "munchkinkombat",
+        name: "Munchkin Kombat",
+        image: munchkinkombat,
+        description: "Don't make me laugh.",
+        active: false,
+    },
+    {
+        id: "needforfeed",
+        name: "Need for Feed",
+        image: needforfeed,
+        description: "Step on the gas. For the Family.",
+        active: false,
+    },
+    // future games go here with active: false until they're built
+];

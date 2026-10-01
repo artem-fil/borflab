@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -9,9 +10,11 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"time"
 
 	"image"
 	"image/jpeg"
+	"image/png"
 	_ "image/png"
 
 	"golang.org/x/image/draw"
@@ -100,6 +103,217 @@ func resizeAndConvert(file io.Reader, maxDim int) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+type SpriteBatch struct {
+	Idle   []byte
+	Walk   []byte
+	Hit    []byte
+	Avatar []byte
+}
+
+// processAndCropSprites нарезает лист на idle/walk/hit + avatar.
+// targetSize — сторона финального квадрата в пикселях (64 или 128).
+// debugDir — если не пусто, туда сохраняются: сырой лист с оверлеем найденных bbox
+// и все промежуточные кропы до финального ресайза. Пусто — дебаг выключен.
+func processAndCropSprites(spriteSheetBytes []byte, targetSize int, debugDir string) (*SpriteBatch, error) {
+	srcImg, _, err := image.Decode(bytes.NewReader(spriteSheetBytes))
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode sprite sheet image: %w", err)
+	}
+
+	bounds := srcImg.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	frameWidth := width / 3
+
+	frames := []struct {
+		name string
+		rect image.Rectangle
+	}{
+		{"idle", image.Rect(0, 0, frameWidth, height)},
+		{"walk", image.Rect(frameWidth, 0, frameWidth*2, height)},
+		{"hit", image.Rect(frameWidth*2, 0, width, height)},
+	}
+
+	crops := make(map[string]*image.RGBA, 3)
+	bboxesForDebug := make(map[string]image.Rectangle, 3)
+
+	for _, f := range frames {
+		bbox, found := findBBox(srcImg, f.rect)
+		if !found {
+			if debugDir != "" {
+				dumpDebugSheet(srcImg, nil, debugDir, "FAILED_"+f.name)
+			}
+			return nil, fmt.Errorf("frame %q: no non-transparent pixels found in its third of the sheet", f.name)
+		}
+		squared := tightSquareCrop(bbox, f.rect, bboxPaddingFrac)
+		bboxesForDebug[f.name] = squared
+		crops[f.name] = cropToRGBA(srcImg, squared)
+	}
+
+	if debugDir != "" {
+		dumpDebugSheet(srcImg, bboxesForDebug, debugDir, "ok")
+		for name, img := range crops {
+			dumpDebugImage(img, debugDir, name+"_crop")
+		}
+	}
+
+	idle64 := letterboxScale(crops["idle"], targetSize)
+	walk64 := letterboxScale(crops["walk"], targetSize)
+	hit64 := letterboxScale(crops["hit"], targetSize)
+
+	idleCrop := crops["idle"]
+	avatarSrcRect := image.Rect(0, 0, idleCrop.Bounds().Dx(), idleCrop.Bounds().Dy()*6/10)
+	avatarCrop := cropToRGBA(idleCrop, avatarSrcRect)
+	avatar64 := letterboxScale(avatarCrop, targetSize)
+
+	return &SpriteBatch{
+		Idle:   encodePNG(idle64),
+		Walk:   encodePNG(walk64),
+		Hit:    encodePNG(hit64),
+		Avatar: encodePNG(avatar64),
+	}, nil
+}
+
+// tightSquareCrop строит квадрат вокруг ЦЕНТРА bbox (не углов), с равным
+// паддингом со всех сторон — гарантирует, что монстр останется по центру
+// кропа. Если квадрат не помещается в frameBounds, сдвигается целиком
+// (не обрезается асимметрично), и только в крайнем случае ужимается,
+// но не меньше исходного bbox.
+func tightSquareCrop(bbox, frameBounds image.Rectangle, paddingFrac float64) image.Rectangle {
+	maxDim := bbox.Dx()
+	if bbox.Dy() > maxDim {
+		maxDim = bbox.Dy()
+	}
+	pad := int(float64(maxDim) * paddingFrac)
+	side := maxDim + pad*2
+
+	cx := (bbox.Min.X + bbox.Max.X) / 2
+	cy := (bbox.Min.Y + bbox.Max.Y) / 2
+
+	maxAllowedSide := frameBounds.Dx()
+	if frameBounds.Dy() < maxAllowedSide {
+		maxAllowedSide = frameBounds.Dy()
+	}
+	if side > maxAllowedSide {
+		side = maxAllowedSide
+		if side < maxDim {
+			side = maxDim // не режем сам силуэт монстра
+		}
+	}
+
+	half := side / 2
+	r := image.Rect(cx-half, cy-half, cx-half+side, cy-half+side)
+
+	// сдвигаем целиком, если вылезли за границы фрейма — форма квадрата
+	// (и центровка монстра внутри него) не нарушается
+	if r.Min.X < frameBounds.Min.X {
+		d := frameBounds.Min.X - r.Min.X
+		r.Min.X += d
+		r.Max.X += d
+	}
+	if r.Max.X > frameBounds.Max.X {
+		d := r.Max.X - frameBounds.Max.X
+		r.Min.X -= d
+		r.Max.X -= d
+	}
+	if r.Min.Y < frameBounds.Min.Y {
+		d := frameBounds.Min.Y - r.Min.Y
+		r.Min.Y += d
+		r.Max.Y += d
+	}
+	if r.Max.Y > frameBounds.Max.Y {
+		d := r.Max.Y - frameBounds.Max.Y
+		r.Min.Y -= d
+		r.Max.Y -= d
+	}
+
+	return r.Intersect(frameBounds)
+}
+
+// letterboxScale масштабирует src методом ближайшего соседа так, чтобы он
+// вписался в targetSize x targetSize БЕЗ искажения пропорций (contain-fit),
+// и центрирует результат на прозрачном квадратном холсте. Длинная сторона
+// монстра будет вплотную к краям картинки, короткая — с минимальным
+// прозрачным полем по бокам.
+func letterboxScale(src image.Image, targetSize int) *image.RGBA {
+	sb := src.Bounds()
+	sw, sh := sb.Dx(), sb.Dy()
+
+	var scale float64
+	if sw >= sh {
+		scale = float64(targetSize) / float64(sw)
+	} else {
+		scale = float64(targetSize) / float64(sh)
+	}
+	dw := int(float64(sw) * scale)
+	dh := int(float64(sh) * scale)
+	if dw < 1 {
+		dw = 1
+	}
+	if dh < 1 {
+		dh = 1
+	}
+
+	scaled := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	draw.NearestNeighbor.Scale(scaled, scaled.Bounds(), src, sb, draw.Over, nil)
+
+	canvas := image.NewRGBA(image.Rect(0, 0, targetSize, targetSize))
+	offX := (targetSize - dw) / 2
+	offY := (targetSize - dh) / 2
+	draw.Draw(canvas, image.Rect(offX, offY, offX+dw, offY+dh), scaled, image.Point{}, draw.Over)
+	return canvas
+}
+
+func cropSubImage(img image.Image, rect image.Rectangle) image.Image {
+	type subImager interface {
+		SubImage(r image.Rectangle) image.Image
+	}
+	if si, ok := img.(subImager); ok {
+		return si.SubImage(rect)
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, rect.Dx(), rect.Dy()))
+	draw.Draw(dst, dst.Bounds(), img, rect.Min, draw.Src)
+	return dst
+}
+
+func resizeTo64(img image.Image) ([]byte, error) {
+	dst := image.NewRGBA(image.Rect(0, 0, 64, 64))
+
+	// NearestNeighbor критически важен, чтобы сохранить четкие границы пикселей pixel-art'а
+	draw.NearestNeighbor.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func downloadFile(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create download request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot execute download request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read downloaded body: %w", err)
+	}
+
+	return data, nil
 }
 
 func CheckStone(maybeStone string) (*StoneType, error) {

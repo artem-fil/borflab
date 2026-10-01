@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,6 +15,8 @@ import (
 type DB struct {
 	Conn *sql.DB
 }
+
+const MaxSpriteRetries = 5
 
 func NewDB(ctx context.Context, cfg DBConfig) (*DB, error) {
 	conn, err := sql.Open("postgres", cfg.ConnURL)
@@ -406,9 +409,10 @@ select
 	biome, rarity, stone,
 	metadata_uri, image_cid,
 	input_url, image_url, thumb_url,
+	sprite_hit_url, sprite_walk_url, sprite_idle_url, sprite_avatar_url, sprite_status,
 	serial_number, serial_stone, serial_biome, generation, status,
 	signature, slot, minted, created
-from monsters where mint_address = $1 and user_id = $2;`, mintAddress, userId).Scan(
+from monsters where id = $1 and user_id = $2;`, mintAddress, userId).Scan(
 		&m.Id, &m.UserId, &m.ExperimentId,
 		&m.MintAddress, &m.OwnerAddress, &m.StoneMintAddress, &m.CardStateAddress,
 		&m.Name, &m.Height, &m.Weight, &m.Species, &m.Lore,
@@ -416,10 +420,175 @@ from monsters where mint_address = $1 and user_id = $2;`, mintAddress, userId).S
 		&m.Biome, &m.Rarity, &m.Stone,
 		&m.MetadataUri, &m.ImageCid,
 		&m.InputUrl, &m.ImageUrl, &m.ThumbUrl,
+		&m.SpriteHitUrl, &m.SpriteWalkUrl, &m.SpriteIdleUrl, &m.SpriteAvatarUrl, &m.SpriteStatus,
 		&m.SerialNumber, &m.SerialStone, &m.SerialBiome, &m.Generation, &m.Status,
 		&m.Signature, &m.Slot, &m.Minted, &m.Created,
 	)
 	return m, err
+}
+
+func (db *DB) SelectMonsterById(ctx context.Context, id int) (*Monster, error) {
+	query := `
+		SELECT id, experiment_id, owner_address, name, metadata_uri, mint_status, mint_retries 
+		FROM monsters 
+		WHERE id = $1
+	`
+	m := &Monster{}
+	err := db.Conn.QueryRowContext(ctx, query, id).Scan(
+		&m.Id, &m.ExperimentId, &m.OwnerAddress, &m.Name, &m.MetadataUri, &m.MintStatus, &m.MintRetries,
+	)
+	return m, err
+}
+
+func (db *DB) IncrementMintRetry(ctx context.Context, id int, finalStatus string) error {
+	query := `
+		UPDATE monsters 
+		SET mint_retries = mint_retries + 1,
+		    mint_status = CASE WHEN mint_retries + 1 >= 3 THEN $1 ELSE 'pending' END
+		WHERE id = $2
+	`
+	_, err := db.Conn.ExecContext(ctx, query, finalStatus, id)
+	return err
+}
+
+func (db *DB) UpdateMonsterCids(ctx context.Context, monsterId int, imageCid, metadataUri string) error {
+	query := `
+		UPDATE monsters 
+		SET image_cid = $1, metadata_uri = $2 
+		WHERE id = $3
+	`
+	_, err := db.Conn.ExecContext(ctx, query, imageCid, metadataUri, monsterId)
+	if err != nil {
+		return fmt.Errorf("failed to update monster cids: %w", err)
+	}
+
+	return nil
+}
+
+func (db *DB) UpdateMonsterSpriteStatus(ctx context.Context, id int, status string) error {
+	query := `UPDATE monsters SET sprite_status = $1, sprite_updated = now() WHERE id = $2`
+	_, err := db.Conn.ExecContext(ctx, query, status, id)
+	return err
+}
+
+func (db *DB) UpdateMonsterSpritesSuccess(ctx context.Context, id int, idleUrl, walkUrl, hitUrl, avatarUrl string) error {
+	query := `
+		UPDATE monsters SET 
+			sprite_idle_url = $1,
+			sprite_walk_url = $2,
+			sprite_hit_url = $3,
+			sprite_avatar_url = $4,
+			sprite_status = 'ready'
+		WHERE id = $5
+	`
+	_, err := db.Conn.ExecContext(ctx, query, idleUrl, walkUrl, hitUrl, avatarUrl, id)
+	return err
+}
+
+func (db *DB) SelectMonsterByExperimentIdTx(ctx context.Context, tx *sql.Tx, experimentId int) (*Monster, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, experiment_id, metadata_uri
+		FROM monsters
+		WHERE experiment_id = $1
+	`, experimentId)
+
+	var m Monster
+	var metadataUri sql.NullString
+	if err := row.Scan(&m.Id, &m.ExperimentId, &metadataUri); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if metadataUri.Valid {
+		m.MetadataUri = &metadataUri.String
+	}
+	return &m, nil
+}
+
+// IncrementSpriteRetry bumps the retry counter, records the new status
+// (usually "failed" for a give-up-this-attempt, or "processing" if we're
+// about to try again inline) and stamps sprite_updated.
+func (d *DB) IncrementSpriteRetry(ctx context.Context, monsterId int, status string) error {
+	_, err := d.Conn.ExecContext(ctx, `
+		UPDATE monsters
+		SET sprite_status   = $2,
+		    sprite_retries  = sprite_retries + 1,
+		    sprite_updated = now()
+		WHERE id = $1
+	`, monsterId, status)
+	return err
+}
+
+// SpriteWatchdogCandidate is the minimal shape the watchdog needs.
+type SpriteWatchdogCandidate struct {
+	MonsterId     int
+	SpriteStatus  string
+	SpriteRetries int
+}
+
+// SelectStalledSpriteMonsters returns monsters whose sprite generation is
+// either stuck in "processing" past a hard timeout, or sitting in "failed"
+// past its backoff window, and hasn't exhausted MaxSpriteRetries yet.
+//
+// processingTimeout: how long "processing" can sit before we assume the
+// worker died mid-flight (e.g. 10 * time.Minute — matches the task TTL
+// used elsewhere in this codebase).
+// backoffFn: given the current retry count, returns how long to wait
+// before the next retry of a "failed" row.
+func (d *DB) SelectStalledSpriteMonsters(
+	ctx context.Context,
+	processingTimeout time.Duration,
+	backoffFn func(retries int) time.Duration,
+) ([]SpriteWatchdogCandidate, error) {
+
+	// Pull failed/processing rows under the retry cap; we do the per-row
+	// backoff check in Go since it's not a fixed interval (SQL could also
+	// do this with a CASE expression if you'd rather keep it single-query
+	// and fully set-based — not worth the complexity here).
+	rows, err := d.Conn.QueryContext(ctx, `
+		SELECT id, sprite_status, sprite_retries, sprite_updated
+		FROM monsters
+		WHERE sprite_status IN ('processing', 'failed')
+		  AND sprite_retries < $1
+	`, MaxSpriteRetries)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	var out []SpriteWatchdogCandidate
+
+	for rows.Next() {
+		var (
+			id      int
+			status  string
+			retries int
+			updated time.Time
+		)
+		if err := rows.Scan(&id, &status, &retries, &updated); err != nil {
+			return nil, err
+		}
+
+		due := false
+		switch status {
+		case "processing":
+			due = now.Sub(updated) >= processingTimeout
+		case "failed":
+			due = now.Sub(updated) >= backoffFn(retries)
+		}
+
+		if due {
+			out = append(out, SpriteWatchdogCandidate{
+				MonsterId:     id,
+				SpriteStatus:  status,
+				SpriteRetries: retries,
+			})
+		}
+	}
+
+	return out, rows.Err()
 }
 
 func (db *DB) SelectSwapPool(ctx context.Context, limit int) ([]Monster, error) {
@@ -500,7 +669,8 @@ returning
 	return &i, nil
 }
 
-func (db *DB) FinishExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
+func (db *DB) UpdateExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
+
 	var tokensArg interface{}
 	if e.TokensUsed != nil {
 		b, err := json.Marshal(e.TokensUsed)
@@ -513,23 +683,17 @@ func (db *DB) FinishExperiment(ctx context.Context, e *Experiment) (sql.Result, 
 	return db.Conn.ExecContext(ctx, `
 update experiments set
     rarity                 = $1,
-    image_cid              = $2,
-    metadata_cid           = $3,
-    metadata               = $4,
-    image_url              = $5,
-    thumb_url              = $6,
-    generated              = $7,
-    uploaded               = $8,
-    prompt_analyze_used    = $9,
-    prompt_generation_used = $10,
-    tokens_used            = $11,
-    cost                   = $12
-where id = $13
+    image_url              = $2,
+    thumb_url              = $3,
+    generated              = $4,
+    uploaded               = $5,
+    prompt_analyze_used    = $6,
+    prompt_generation_used = $7,
+    tokens_used            = $8,
+    cost                   = $9
+where id = $10
 	`,
 		e.Rarity,
-		e.ImageCID,
-		e.MetadataCID,
-		e.Metadata,
 		e.ImageUrl,
 		e.ThumbUrl,
 		e.Generated,
@@ -538,6 +702,17 @@ where id = $13
 		e.PromptGenerationUsed,
 		tokensArg,
 		e.Cost,
+		e.Id,
+	)
+}
+
+func (db *DB) FinishExperiment(ctx context.Context, e *Experiment) (sql.Result, error) {
+
+	return db.Conn.ExecContext(ctx, `
+update experiments set image_cid = $1, metadata_cid = $2, metadata = $3 where id = $4`,
+		e.ImageCid,
+		e.MetadataCid,
+		e.Metadata,
 		e.Id,
 	)
 }
@@ -584,8 +759,8 @@ where id = $1
 		&e.ImageUrl,
 		&e.ThumbUrl,
 		&e.Specimen,
-		&e.ImageCID,
-		&e.MetadataCID,
+		&e.ImageCid,
+		&e.MetadataCid,
 		&e.Metadata,
 		&e.Stone,
 		&e.Biome,
@@ -861,114 +1036,74 @@ where id = (
 	return err
 }
 
-func (db *DB) InsertMonsterTx(ctx context.Context, tx *sql.Tx, monster *Monster) error {
-	result, err := db.Conn.ExecContext(ctx, `
-insert into monsters (
-    user_id,
-	experiment_id,
-    mint_address,
-	owner_address,
-	stone_mint_address,
-	card_state_address,
-    name, height,
-	weight, species,
-	lore,
-    movement_class,
-	behaviour,
-	personality,
-	abilities,
-	habitat,
-    biome,
-	rarity,
-	stone,
-    metadata_uri,
-	image_cid,
-    input_url,
-	image_url,
-	thumb_url,
-    serial_number,
-	serial_stone,
-	serial_biome,
-	generation,
-	status,
-	signature,
-	slot,
-	minted
-) values (
-    (select privy_id from users where $1 = any(wallets)),
-    $2,
-	$3,
-	$4,
-	$5,
-	$6,
-	$7,
-	$8,
-	$9,
-	$10,
-	$11,
-    $12,
-	$13,
-	$14,
-	$15,
-	$16,
-	$17,
-	$18,
-	$19,
-	$20,
-	$21,
-    (select input_url from experiments where id = $2),
-    (select image_url from experiments where id = $2),
-    (select thumb_url from experiments where id = $2),
-    $22,
-	$23,
-	$24,
-	$25,
-	$26,
-	$27,
-	$28,
-	$29
-) on conflict (signature) do nothing
-    `,
-		monster.OwnerAddress,     // $1
-		monster.ExperimentId,     // $2
-		monster.MintAddress,      // $3
-		monster.OwnerAddress,     // $4
-		monster.StoneMintAddress, // $5
-		monster.CardStateAddress, // $6
-		monster.Name,             // $7
-		monster.Height,           // $8
-		monster.Weight,           // $9
-		monster.Species,          // $10
-		monster.Lore,             // $11
-		monster.MovementClass,    // $12
-		monster.Behaviour,        // $13
-		monster.Personality,      // $14
-		monster.Abilities,        // $15
-		monster.Habitat,          // $16
-		monster.Biome,            // $17
-		monster.Rarity,           // $18
-		monster.Stone,            // $19
-		monster.MetadataUri,      // $20
-		monster.ImageCid,         // $21
-		monster.SerialNumber,     // $22
-		monster.SerialStone,      // $23
-		monster.SerialBiome,      // $24
-		monster.Generation,       // $25
-		monster.Status,           // $26
-		monster.Signature,        // $27
-		monster.Slot,             // $28
-		monster.Minted,           // $29
-	)
+func (db *DB) InsertMonsterTx(ctx context.Context, tx *sql.Tx, m *Monster) error {
+	err := tx.QueryRowContext(
+		ctx,
+		`
+		INSERT INTO monsters (
+			user_id,
+			experiment_id,
+			owner_address,
+			name,
+			species,
+			lore,
+			height,
+			weight,
+			movement_class,
+			behaviour,
+			personality,
+			abilities,
+			habitat,
+			biome,
+			rarity,
+			stone,
+			serial_number,
+			serial_stone,
+			serial_biome,
+			generation,
+			status,
+			image_url,
+			input_url,
+			thumb_url
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10,
+			$11, $12, $13, $14, $15,
+			$16, $17, $18, $19, $20,
+			$21, $22, $23, $24
+		)
+		RETURNING id;
+	`,
+		m.UserId,
+		m.ExperimentId,
+		m.OwnerAddress,
+		m.Name,
+		m.Species,
+		m.Lore,
+		m.Height,
+		m.Weight,
+		m.MovementClass,
+		m.Behaviour,
+		m.Personality,
+		m.Abilities,
+		m.Habitat,
+		m.Biome,
+		m.Rarity,
+		m.Stone,
+		m.SerialNumber,
+		m.SerialStone,
+		m.SerialBiome,
+		m.Generation,
+		m.Status,
+		m.ImageUrl,
+		m.InputUrl,
+		m.ThumbUrl,
+	).Scan(&m.Id)
+
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to insert monster into db: %w", err)
 	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("no rows inserted for monster: %s", monster.MintAddress)
-	}
+
 	return nil
 }
 
@@ -1322,15 +1457,28 @@ func nullable(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: true}
 }
 
-// nullableJSONB returns a sql.NullString containing the JSONB representation of v, or an invalid NullString if v is nil or marshals to an empty object.
-func nullableJSONB(v map[string]string) sql.NullString {
-	if v == nil || len(v) == 0 {
-		return sql.NullString{Valid: false}
+type NullRawMessage json.RawMessage
+
+// Scan реализует интерфейс sql.Scanner для корректного чтения NULL из Postgres
+func (n *NullRawMessage) Scan(value any) error {
+	if value == nil {
+		*n = nil
+		return nil
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		LogWarning("DB", fmt.Sprintf("failed to marshal map to JSONB: %v", err))
-		return sql.NullString{Valid: false} // Or handle error appropriately
+
+	bytes, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("failed to unmarshal JSONB value: %v", value)
 	}
-	return sql.NullString{String: string(b), Valid: true}
+
+	*n = append((*n)[0:0], bytes...)
+	return nil
+}
+
+// Value реализует интерфейс driver.Valuer для записи в Postgres
+func (n NullRawMessage) Value() (driver.Value, error) {
+	if len(n) == 0 {
+		return nil, nil
+	}
+	return []byte(n), nil
 }

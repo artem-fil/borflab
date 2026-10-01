@@ -5,7 +5,6 @@ import transmutatorImg from "@images/transmutator.webp";
 import watermarkImg from "@images/watermark.png";
 import { useWallets } from "@privy-io/react-auth/solana";
 import labSound from "@sounds/lab.ogg";
-import mintSound from "@sounds/mint.ogg";
 import printerSound from "@sounds/printer.ogg";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -41,23 +40,19 @@ const progressMessages = [
 ];
 
 export default function Step2({ current, specimen, stone, biome }) {
-    const [phase, setPhase] = useState("ANALYZING");
+    const [phase, setPhase] = useState("ANALYZING"); // ANALYZING -> GENERATING -> READY
     const [analyzeResult, setAnalyzeResult] = useState(null);
     const [image, setImage] = useState(null);
-    const [experimentId, setExperimentId] = useState(null);
+    const [monsterId, setMonsterId] = useState(null);
 
     const [progress, setProgress] = useState(0);
     const [displayed, setDisplayed] = useState("");
     const [previewUrl, setPreviewUrl] = useState("");
 
-    const [minting, setIsMinting] = useState(false);
-    const [mintSuccess, setMintSuccess] = useState(false);
-    const [mintError, setMintError] = useState(false);
     const [activeWallet, setActiveWallet] = useState(null);
     const [bubble, setBubble] = useState(null);
 
     const monitorRef = useRef(null);
-    const audioMint = useRef(null);
     const audioLab = useRef(null);
     const audioPrinter = useRef(null);
 
@@ -74,11 +69,11 @@ export default function Step2({ current, specimen, stone, biome }) {
     });
 
     const phraseIndexRef = useRef(0);
-
     const pollSessionRef = useRef(null);
 
     const { wallets } = useWallets();
 
+    // 1. Кошелек & Preview
     useEffect(() => {
         if (wallets?.length > 0) {
             const stored = localStorage.getItem("primaryWallet");
@@ -91,40 +86,39 @@ export default function Step2({ current, specimen, stone, biome }) {
         }
     }, [wallets, specimen]);
 
+    // 2. Старт процесса
     useEffect(() => {
-        if (current === 1 && !hasStarted.current) {
+        if (current === 1 && !hasStarted.current && activeWallet) {
             if (!specimen || !biome || !stone) {
-                throw new Error(
-                    `Incomplete data for transmutation: ${JSON.stringify({ specimen: !!specimen, biome, stone: !!stone })}`
-                );
+                throw new Error("Incomplete data for transmutation");
             }
             hasStarted.current = true;
             runWorkflow();
         }
-    }, [current, specimen, biome, stone]);
+    }, [current, specimen, biome, stone, activeWallet]);
 
+    // 3. Бабблы при успехе
     useEffect(() => {
-        if (!mintSuccess) return;
+        if (phase !== "READY") return;
         const interval = setInterval(() => {
             const phrase = monsterPhrases[Math.floor(Math.random() * monsterPhrases.length)];
             setBubble(phrase);
             setTimeout(() => setBubble(null), 2000);
         }, 7000);
         return () => clearInterval(interval);
-    }, [mintSuccess]);
+    }, [phase]);
 
+    // 4. Печатная машинка (Typewriter)
     useEffect(() => {
         const id = setInterval(() => {
             const tw = twRef.current;
 
-            // ещё печатаем текущую строку
             if (tw.charIdx < tw.current.length) {
                 tw.charIdx++;
                 setDisplayed(tw.typed + tw.current.slice(0, tw.charIdx));
                 return;
             }
 
-            // текущая строка закончилась
             if (tw.current.length > 0) {
                 tw.typed += tw.current;
                 tw.current = "";
@@ -133,7 +127,6 @@ export default function Step2({ current, specimen, stone, biome }) {
                 tw.resolve = null;
             }
 
-            // берём следующую из очереди
             if (tw.pending.length > 0) {
                 const { text, resolve } = tw.pending.shift();
                 tw.current = text + "\n";
@@ -144,17 +137,19 @@ export default function Step2({ current, specimen, stone, biome }) {
         return () => clearInterval(id);
     }, []);
 
+    // 5. Автоскролл консоли
     useEffect(() => {
         if (monitorRef.current) {
             monitorRef.current.scrollTop = monitorRef.current.scrollHeight;
         }
-    }, [displayed, minting, mintSuccess, mintError]);
+    }, [displayed, phase]);
 
+    // 6. Анимация карточки рубашки
     useEffect(() => {
-        if (phase !== "GENERATING" && phase !== "MINTING") return;
+        if (phase !== "GENERATING") return;
         if (!backCardRef.current) return;
 
-        const PHASE_START = 15; // та же цифра что P.Analyzed на сервере, ~23
+        const PHASE_START = 15;
         const t = Math.min(Math.max((progress - PHASE_START) / (100 - PHASE_START), 0), 1);
         const translateY = 100 - t * 100;
 
@@ -163,24 +158,23 @@ export default function Step2({ current, specimen, stone, biome }) {
     }, [progress, phase]);
 
     function getAudio(ref, src) {
-        if (!ref.current) {
-            ref.current = new Audio(src);
-        }
+        if (!ref.current) ref.current = new Audio(src);
         return ref.current;
     }
+
     function stopAllAudio() {
-        [audioLab, audioPrinter, audioMint].forEach((r) => {
+        [audioLab, audioPrinter].forEach((r) => {
             if (!r.current) return;
             r.current.pause();
-            r.current.src = ""; // освобождает декодированный буфер
+            r.current.src = "";
             r.current = null;
         });
     }
 
-    function maybeAdvancePhrase(progress) {
+    function maybeAdvancePhrase(p) {
         if (phraseIndexRef.current >= progressMessages.length) return;
         const step = 100 / progressMessages.length;
-        const expectedIndex = Math.floor(progress / step);
+        const expectedIndex = Math.floor(p / step);
 
         while (phraseIndexRef.current <= expectedIndex && phraseIndexRef.current < progressMessages.length) {
             appendTypedLine(progressMessages[phraseIndexRef.current]);
@@ -188,9 +182,10 @@ export default function Step2({ current, specimen, stone, biome }) {
         }
     }
 
+    // ── ОСНОВНОЙ ПАЙПЛАЙН ──────────────────────────────────────────────────
     async function runWorkflow() {
         clearLog();
-        log("workflow:start", { biome, stone: stone.Type });
+        log("workflow:start", { biome, stone: stone.Type, wallet: activeWallet.address });
 
         getAudio(audioLab, labSound).volume = 0.5;
         getAudio(audioLab, labSound)
@@ -204,8 +199,9 @@ export default function Step2({ current, specimen, stone, biome }) {
             formData.append("file", prepared, "specimen.jpg");
             formData.append("biome", biome);
             formData.append("stone", stone.Type);
+            formData.append("userPubKey", activeWallet.address); // <-- Передаем кошелек сразу в форме
 
-            // ── analyze ───────────────────────────────────────────────────────────
+            // 1. Analyze
             log("analyze:start");
             const { Id } = await api.analyze(formData);
             log("analyze:taskCreated", { taskId: Id });
@@ -227,6 +223,7 @@ export default function Step2({ current, specimen, stone, biome }) {
             await appendTypedLine("Analysis complete.");
             await appendTypedLine("Starting transmutation...");
 
+            // 2. Generate
             setPhase("GENERATING");
             getAudio(audioLab, labSound).pause();
             getAudio(audioPrinter, printerSound).loop = true;
@@ -235,7 +232,6 @@ export default function Step2({ current, specimen, stone, biome }) {
                 .play()
                 .catch(() => {});
 
-            // ── generate ──────────────────────────────────────────────────────────
             log("generate:start", { taskId: nextTaskId });
             const session2 = createPollSession();
             pollSessionRef.current = session2;
@@ -249,14 +245,18 @@ export default function Step2({ current, specimen, stone, biome }) {
 
             pollSessionRef.current = null;
             setProgress(100);
-            await appendTypedLine("💶 Initializing uplink ✅");
 
-            const { image: imgData, experimentId: expId } = genResult;
+            const { image: imgData, monsterId: mId } = genResult;
             setImage(imgData);
-            setExperimentId(expId);
+            setMonsterId(mId);
 
-            log("workflow:generationDone", { expId });
-            await triggerAutoMint(expId);
+            await appendTypedLine("💶 MONSTER CREATED SUCCESSFULLY! ✅");
+
+            log("workflow:success", { monsterId: mId });
+            flushLog(`Workflow success: monster #${mId}`);
+
+            setPhase("READY");
+            showFrontCard();
         } catch (err) {
             pollSessionRef.current?.cancel();
             pollSessionRef.current = null;
@@ -264,55 +264,6 @@ export default function Step2({ current, specimen, stone, biome }) {
             log("workflow:error", { msg: err.message }, "error");
             flushLog(`Workflow error: ${err.message}`);
             appendTypedLine(`❌ ERROR: ${err.message || "Unknown error"}`);
-        }
-    }
-
-    async function triggerAutoMint(expId) {
-        setPhase("MINTING");
-        getAudio(audioPrinter, printerSound).pause();
-        getAudio(audioPrinter, printerSound).currentTime = 0;
-        getAudio(audioMint, mintSound).loop = true;
-        getAudio(audioMint, mintSound).volume = 0.3;
-        getAudio(audioMint, mintSound)
-            .play()
-            .catch(() => {});
-
-        await handleMintAction(expId);
-    }
-
-    async function handleMintAction(expId) {
-        if (!activeWallet) return;
-        setIsMinting(true);
-
-        try {
-            log("mint:start", { expId });
-            await api.mintMonster(expId, {
-                userPubKey: activeWallet.address,
-                stone: stone.Type,
-            });
-
-            const mintSession = createPollSession();
-            pollSessionRef.current = mintSession;
-            await mintSession.pollMintStatus(expId);
-
-            pollSessionRef.current = null;
-            log("mint:confirmed", { expId });
-            flushLog(`Workflow success: ${expId}`); // шлём в TG даже при успехе — для тайминг-статистики
-
-            setMintSuccess(true);
-            setIsMinting(false);
-            setPhase("READY");
-            setDisplayed((prev) => prev + "SPIRAL INDEX REGISTERED ✅\n");
-            showFrontCard();
-        } catch (err) {
-            pollSessionRef.current?.cancel();
-            pollSessionRef.current = null;
-            stopAllAudio();
-            setIsMinting(false);
-            setMintError(true);
-            log("mint:error", { expId, msg: err.message }, "error");
-            flushLog(`Mint error: ${err.message}`);
-            setDisplayed((prev) => prev + `❌ ${err.message}\n`);
         }
     }
 
@@ -371,10 +322,8 @@ export default function Step2({ current, specimen, stone, biome }) {
                     </div>
                     <div ref={monitorRef} className="overflow-auto" style={{ height: "calc(100% - 1.2em)" }}>
                         <span className="whitespace-pre-wrap">{displayed}</span>
-
-                        {minting && <div className="text-orange-400 animate-pulse mt-1">Securing on chain...</div>}
-                        {mintError && <div className="text-red-500 font-bold mt-1">[!] CRITICAL_MINT_FAILURE</div>}
-                        {mintSuccess && (
+                        <span className="animate-pulse">▋</span>
+                        {image && (
                             <div className="p-1 border border-primary/50 bg-lime-900/20 pointer-events-auto">
                                 <Link
                                     to="/library"
@@ -384,7 +333,6 @@ export default function Step2({ current, specimen, stone, biome }) {
                                 </Link>
                             </div>
                         )}
-                        <span className="animate-pulse">▋</span>
                     </div>
                 </div>
 
@@ -576,7 +524,7 @@ export default function Step2({ current, specimen, stone, biome }) {
                                                 src={image}
                                                 className="max-h-full max-w-full w-auto h-auto object-contain mr-auto ml-auto z-10"
                                                 style={{
-                                                    animation: mintSuccess ? "escape 3.5s infinite" : "",
+                                                    animation: "escape 3.5s infinite",
                                                 }}
                                                 alt="output"
                                             />
@@ -619,16 +567,16 @@ export default function Step2({ current, specimen, stone, biome }) {
                     </div>
                 </div>
 
-                {/* mint status indicators */}
+                {/* status indicators */}
                 <div
                     className={`absolute z-10 aspect-square rounded-full transition-colors ${
-                        mintSuccess ? "bg-green-500/70" : "bg-transparent"
+                        image ? "bg-green-500/70" : "bg-transparent"
                     }`}
                     style={{ top: "33.5%", left: "88.7%", width: "3%" }}
                 />
                 <div
                     className={`absolute z-10 aspect-square rounded-full transition-colors ${
-                        mintError ? "bg-red-500/70" : "bg-transparent"
+                        image ? "bg-red-500/70" : "bg-transparent"
                     }`}
                     style={{ top: "42.5%", left: "88.7%", width: "3%" }}
                 />
