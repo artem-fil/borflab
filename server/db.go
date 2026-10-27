@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -339,6 +340,21 @@ func (db *DB) SelectStoneStats(ctx context.Context, userId string) (map[string]i
 	}
 
 	return stats, nil
+}
+
+func (db *DB) ClaimSpriteGeneration(ctx context.Context, id int) (bool, error) {
+	res, err := db.Conn.ExecContext(ctx, `
+		UPDATE monsters
+		SET sprite_status = 'processing', sprite_updated = now()
+		WHERE id = $1
+		  AND COALESCE(sprite_status, '') <> 'ready'
+		  AND (COALESCE(sprite_status, '') <> 'processing'
+		       OR sprite_updated < now() - interval '6 minutes')`, id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 func (db *DB) SelectMonsters(ctx context.Context, userId string, limit int, offset int, sort string, order string) ([]Monster, int, error) {
@@ -1204,6 +1220,328 @@ func (db *DB) SelectTxStatus(ctx context.Context, signature string) (bool, error
 		return exists, err
 	}
 	return exists, err
+}
+
+// ── Games ───────────────────────────────────────────────────────────────────
+
+// v2: ЗАМЕНЯЕТ db_games.go целиком. Изменения: у периода появилась верхняя граница ($3 until),
+// нумерация остальных параметров сдвинулась. Сессии/забеги — без изменений.
+
+type Window struct {
+	Full      int
+	Head      int
+	Neighbors int
+}
+
+type LBRow struct {
+	Rank      int
+	MonsterId int
+	Name      string
+	SpriteUrl string
+	BorfId    string
+	Metrics   map[string]float64
+	Mine      bool
+	At        time.Time
+}
+
+type LBResult struct {
+	Total  int
+	MyRank int
+	Rows   []LBRow
+}
+
+// ───────────────────────── сессии ─────────────────────────
+
+func (db *DB) OwnsMonster(ctx context.Context, userID string, monsterID int) (bool, error) {
+	var ok bool
+	err := db.Conn.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM monsters WHERE id = $1 AND user_id = $2)`,
+		monsterID, userID).Scan(&ok)
+	return ok, err
+}
+
+func (db *DB) CountRecentSessions(ctx context.Context, userID string, since time.Time) (int, error) {
+	var n int
+	err := db.Conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM game_sessions WHERE user_id = $1 AND started_at >= $2`,
+		userID, since).Scan(&n)
+	return n, err
+}
+
+func (db *DB) CreateGameSession(ctx context.Context, gameID, userID string, monsterID int, seed int32) (string, error) {
+	var id string
+	err := db.Conn.QueryRowContext(ctx, `
+		INSERT INTO game_sessions (game_id, user_id, monster_id, seed)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id::text`,
+		gameID, userID, monsterID, seed).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("failed to create game session: %w", err)
+	}
+	return id, nil
+}
+
+type ClaimedSession struct {
+	MonsterId int
+	Elapsed   float64
+}
+
+func (db *DB) ClaimGameSession(ctx context.Context, id, userID, gameID string) (*ClaimedSession, error) {
+	var s ClaimedSession
+	err := db.Conn.QueryRowContext(ctx, `
+		UPDATE game_sessions SET finished_at = now()
+		WHERE id = $1::uuid AND user_id = $2 AND game_id = $3 AND finished_at IS NULL
+		RETURNING monster_id, EXTRACT(EPOCH FROM (now() - started_at))::float8`,
+		id, userID, gameID).Scan(&s.MonsterId, &s.Elapsed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to claim game session: %w", err)
+	}
+	return &s, nil
+}
+
+func (db *DB) BestMetric(ctx context.Context, gameID string, monsterID int, key string, desc bool) (float64, bool, error) {
+	dir := "ASC"
+	if desc {
+		dir = "DESC"
+	}
+	var v float64
+	err := db.Conn.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT (metrics->>$3)::float8 FROM game_runs
+		WHERE game_id = $1 AND monster_id = $2
+		ORDER BY (metrics->>$3)::numeric %s LIMIT 1`, dir),
+		gameID, monsterID, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to select best metric: %w", err)
+	}
+	return v, true, nil
+}
+
+func (db *DB) InsertGameRun(ctx context.Context, sessionID, gameID string, monsterID int, userID string, metrics map[string]float64, moves json.RawMessage) error {
+	mj, err := json.Marshal(metrics)
+	if err != nil {
+		return err
+	}
+	var mv any
+	if len(moves) > 0 {
+		mv = []byte(moves)
+	}
+	_, err = db.Conn.ExecContext(ctx, `
+		INSERT INTO game_runs (session_id, game_id, monster_id, user_id, metrics, moves)
+		VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6::jsonb)`,
+		sessionID, gameID, monsterID, userID, mj, mv)
+	if err != nil {
+		return fmt.Errorf("failed to insert game run: %w", err)
+	}
+	return nil
+}
+
+// ───────────────────────── лидерборд ─────────────────────────
+
+func metricOrder(m *MetricDef, prefix string) string {
+	dir := "ASC"
+	if m.Desc {
+		dir = "DESC"
+	}
+	return fmt.Sprintf("(%smetrics->>'%s')::numeric %s", prefix, m.Key, dir)
+}
+
+func orderBy(g *GameDef, primary, prefix string) string {
+	parts := []string{metricOrder(g.metric(primary), prefix)}
+	for i := range g.Metrics {
+		if g.Metrics[i].Key != primary {
+			parts = append(parts, metricOrder(&g.Metrics[i], prefix))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// Параметры: $1 game_id, $2 since (включительно), $3 until (исключительно).
+func rankedCTE(g *GameDef, primary string) string {
+	return fmt.Sprintf(`
+	best AS (
+		SELECT DISTINCT ON (r.monster_id)
+			r.monster_id, r.metrics, r.created_at, m.user_id AS owner
+		FROM game_runs r
+		JOIN monsters m ON m.id = r.monster_id
+		WHERE r.game_id = $1 AND r.created_at >= $2 AND r.created_at < $3
+		ORDER BY r.monster_id, %s, r.created_at ASC
+	),
+	ranked AS (
+		SELECT b.*, ROW_NUMBER() OVER (ORDER BY %s, b.created_at ASC, b.monster_id) AS rank
+		FROM best b
+	)`, orderBy(g, primary, "r."), orderBy(g, primary, "b."))
+}
+
+func (db *DB) SelectLeaderboard(ctx context.Context, g *GameDef, primary string, since, until time.Time, monsterID int, userID string, win Window) (*LBResult, error) {
+	q := `WITH ` + rankedCTE(g, primary) + `,
+	total AS (SELECT COUNT(*) AS c FROM ranked),
+	me AS (
+		SELECT rank FROM ranked
+		WHERE ($4::int > 0 AND monster_id = $4::int) OR ($4::int = 0 AND owner = $5::text)
+		ORDER BY rank LIMIT 1
+	)
+	SELECT r.rank, r.monster_id, m.name,
+	       COALESCE(m.sprite_idle_url, m.sprite_avatar_url, m.thumb_url, ''),
+	       COALESCE(u.borf_id, ''),
+	       r.metrics, r.created_at,
+	       (r.owner = $5::text) AS mine,
+	       t.c, COALESCE(me.rank, 0)
+	FROM ranked r
+	JOIN monsters m ON m.id = r.monster_id
+	LEFT JOIN users u ON u.privy_id = m.user_id
+	CROSS JOIN total t
+	LEFT JOIN me ON TRUE
+	WHERE r.rank <= CASE WHEN me.rank IS NULL OR me.rank <= $6::int THEN $6::int ELSE $7::int END
+	   OR (me.rank > $6::int AND (r.rank BETWEEN me.rank - $8::int AND me.rank + $8::int OR r.rank = t.c))
+	ORDER BY r.rank`
+
+	rows, err := db.Conn.QueryContext(ctx, q, g.Id, since, until, monsterID, userID, win.Full, win.Head, win.Neighbors)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select leaderboard: %w", err)
+	}
+	defer rows.Close()
+
+	res := &LBResult{}
+	for rows.Next() {
+		var (
+			row LBRow
+			raw []byte
+		)
+		if err := rows.Scan(&row.Rank, &row.MonsterId, &row.Name, &row.SpriteUrl, &row.BorfId,
+			&raw, &row.At, &row.Mine, &res.Total, &res.MyRank); err != nil {
+			return nil, fmt.Errorf("failed to scan leaderboard row: %w", err)
+		}
+		if err := json.Unmarshal(raw, &row.Metrics); err != nil {
+			return nil, fmt.Errorf("failed to decode metrics: %w", err)
+		}
+		res.Rows = append(res.Rows, row)
+	}
+	return res, rows.Err()
+}
+
+// Место и лучший забег монстра за период [since, farFuture). found=false — забегов нет.
+func (db *DB) SelectMonsterRank(ctx context.Context, g *GameDef, primary string, monsterID int, since time.Time) (rank, total int, metrics map[string]float64, found bool, err error) {
+	q := `WITH ` + rankedCTE(g, primary) + `,
+	total AS (SELECT COUNT(*) AS c FROM ranked)
+	SELECT r.rank, t.c, r.metrics
+	FROM ranked r CROSS JOIN total t
+	WHERE r.monster_id = $4::int`
+
+	var raw []byte
+	err = db.Conn.QueryRowContext(ctx, q, g.Id, since, farFuture, monsterID).Scan(&rank, &total, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, nil, false, nil
+	}
+	if err != nil {
+		return 0, 0, nil, false, fmt.Errorf("failed to select monster rank: %w", err)
+	}
+	if err := json.Unmarshal(raw, &metrics); err != nil {
+		return 0, 0, nil, false, err
+	}
+	return rank, total, metrics, true, nil
+}
+
+type HistoryEntry struct {
+	Start  time.Time
+	End    time.Time
+	Total  int   // сколько монстров участвовало в периоде
+	Winner LBRow // чемпион периода (Rank = 1)
+}
+
+// Есть ли у игры забеги раньше since (для кнопки «‹» в навигаторе).
+func (db *DB) HasRunsBefore(ctx context.Context, gameID string, since time.Time) (bool, error) {
+	var ok bool
+	err := db.Conn.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM game_runs WHERE game_id = $1 AND created_at < $2)`,
+		gameID, since).Scan(&ok)
+	return ok, err
+}
+
+// Годы (UTC), в которых у игры были забеги, новые первыми.
+func (db *DB) RunYears(ctx context.Context, gameID string) ([]int, error) {
+	rows, err := db.Conn.QueryContext(ctx, `
+		SELECT DISTINCT EXTRACT(YEAR FROM created_at AT TIME ZONE 'UTC')::int AS y
+		FROM game_runs WHERE game_id = $1 ORDER BY y DESC`, gameID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select run years: %w", err)
+	}
+	defer rows.Close()
+	years := []int{}
+	for rows.Next() {
+		var y int
+		if err := rows.Scan(&y); err != nil {
+			return nil, err
+		}
+		years = append(years, y)
+	}
+	return years, rows.Err()
+}
+
+// Чемпион каждого периода (week|month|year), чей СТАРТ попадает в [from, to).
+// Забеги берём с запасом ±7 дней: неделя на стыке годов считается целиком и
+// относится к тому году, в котором стартовала.
+// unit подставляется в SQL — только из белого списка (см. хендлер).
+func (db *DB) SelectPeriodChampions(ctx context.Context, g *GameDef, primary, unit string, from, to time.Time) ([]HistoryEntry, error) {
+	q := fmt.Sprintf(`
+	WITH runs AS (
+		SELECT date_trunc('%[1]s', r.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
+		       r.monster_id, r.metrics, r.created_at
+		FROM game_runs r
+		WHERE r.game_id = $1 AND r.created_at >= $2 AND r.created_at < $3
+	),
+	best AS (
+		SELECT DISTINCT ON (bucket, monster_id) bucket, monster_id, metrics, created_at
+		FROM runs
+		ORDER BY bucket, monster_id, %[2]s, created_at ASC
+	),
+	ranked AS (
+		SELECT b.*,
+		       ROW_NUMBER() OVER (PARTITION BY b.bucket ORDER BY %[3]s, b.created_at ASC, b.monster_id) AS rank,
+		       COUNT(*)     OVER (PARTITION BY b.bucket) AS total
+		FROM best b
+	)
+	SELECT r.bucket, r.total, r.monster_id, m.name,
+	       COALESCE(m.sprite_idle_url, m.sprite_avatar_url, m.thumb_url, ''),
+	       COALESCE(u.borf_id, ''), r.metrics, r.created_at
+	FROM ranked r
+	JOIN monsters m ON m.id = r.monster_id
+	LEFT JOIN users u ON u.privy_id = m.user_id
+	WHERE r.rank = 1 AND r.bucket >= $4 AND r.bucket < $5
+	ORDER BY r.bucket DESC`,
+		unit, orderBy(g, primary, ""), orderBy(g, primary, "b."))
+
+	rows, err := db.Conn.QueryContext(ctx, q, g.Id,
+		from.AddDate(0, 0, -7), to.AddDate(0, 0, 7), from, to)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select period champions: %w", err)
+	}
+	defer rows.Close()
+
+	out := []HistoryEntry{}
+	for rows.Next() {
+		var (
+			e   HistoryEntry
+			raw []byte
+		)
+		e.Winner.Rank = 1
+		if err := rows.Scan(&e.Start, &e.Total, &e.Winner.MonsterId, &e.Winner.Name, &e.Winner.SpriteUrl,
+			&e.Winner.BorfId, &raw, &e.Winner.At); err != nil {
+			return nil, fmt.Errorf("failed to scan champion: %w", err)
+		}
+		if err := json.Unmarshal(raw, &e.Winner.Metrics); err != nil {
+			return nil, err
+		}
+		e.Start = e.Start.UTC()
+		_, e.End, _ = periodBounds(unit, e.Start)
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────────

@@ -1,13 +1,24 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import api from "../api"; // как в остальных файлах
 import { GAMES } from "../config.js";
-
-const BEST_STATS = { rank: 12, score: 4820 };
 
 export default function Games() {
     const navigate = useNavigate();
     const location = useLocation();
     const monster = location.state?.monster;
+    const [stats, setStats] = useState(null);
+
+    useEffect(() => {
+        if (!monster) return;
+        let off = false;
+        api.getGameStats(monster.Id)
+            .then((r) => !off && setStats(r.Stats))
+            .catch(() => {});
+        return () => {
+            off = true;
+        };
+    }, [monster]);
 
     useEffect(() => {
         if (!monster) {
@@ -21,6 +32,7 @@ export default function Games() {
 
     const handleSelectGame = (game) => {
         if (!game.active) return;
+
         navigate(`/play/${game.id}`, { state: { monster } });
     };
 
@@ -42,10 +54,10 @@ export default function Games() {
 
             <div className="w-full flex-grow overflow-y-auto px-4 py-2">
                 <div className="flex flex-col gap-2 pb-2">
-                    {GAMES.map((game) => (
+                    {Object.entries(GAMES).map(([id, game]) => (
                         <div
-                            key={game.id}
-                            onClick={() => handleSelectGame(game)}
+                            key={id}
+                            onClick={() => handleSelectGame({ id, ...game })}
                             className={`relative w-full aspect-[2/1] rounded-2xl overflow-hidden border-2 ${
                                 game.active
                                     ? "border-black cursor-pointer active:scale-[0.98] transition-transform"
@@ -77,16 +89,28 @@ export default function Games() {
                                     {game.active ? game.description : "Coming soon"}
                                 </span>
 
-                                {game.active && (
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                        <span className="flex items-center gap-1 rounded-full bg-black/50 backdrop-blur-sm px-2 py-1 text-white text-xs font-bold">
-                                            🏆 #{BEST_STATS.rank}
-                                        </span>
-                                        <span className="flex items-center gap-1 rounded-full bg-black/50 backdrop-blur-sm px-2 py-1 text-white text-xs font-bold">
-                                            ⭐ {BEST_STATS.score.toLocaleString("en-US")}
-                                        </span>
-                                    </div>
-                                )}
+                                {game.active &&
+                                    (() => {
+                                        const s = stats?.[game.id];
+                                        return (
+                                            <div className="flex items-center gap-1.5 shrink-0">
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        navigate("/leaderboard", {
+                                                            state: { gameId: game.id, monsterId: monster.Id },
+                                                        });
+                                                    }}
+                                                    className="flex items-center gap-1 rounded-full bg-black/50 backdrop-blur-sm px-2 py-1 text-white text-xs font-bold"
+                                                >
+                                                    🏆 {s ? `#${s.Rank}` : "—"}
+                                                </button>
+                                                <span className="flex items-center gap-1 rounded-full bg-black/50 backdrop-blur-sm px-2 py-1 text-white text-xs font-bold">
+                                                    ⭐ {s ? Number(s.Metrics[s.Primary]).toLocaleString("en-US") : "—"}
+                                                </span>
+                                            </div>
+                                        );
+                                    })()}
                             </div>
                         </div>
                     ))}

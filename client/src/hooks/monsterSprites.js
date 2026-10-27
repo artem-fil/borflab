@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import api from "../api";
 
 const POLL_INTERVAL_MS = 2500;
@@ -19,61 +19,79 @@ const POLL_TIMEOUT_MS = 90000;
 export function useMonsterSprites(initialMonster) {
     const [monster, setMonster] = useState(initialMonster);
     const [status, setStatus] = useState(initialMonster?.SpriteStatus === "ready" ? "ready" : "loading");
-
-    const elapsedRef = useRef(0);
-    const stoppedRef = useRef(status !== "loading");
+    const [progress, setProgress] = useState(0);
 
     useEffect(() => {
-        if (stoppedRef.current) return;
+        if (status !== "loading") return;
 
-        const intervalId = setInterval(async () => {
-            if (stoppedRef.current) return;
+        let cancelled = false;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-            elapsedRef.current += POLL_INTERVAL_MS;
-
-            if (elapsedRef.current >= POLL_TIMEOUT_MS) {
-                stoppedRef.current = true;
-                setStatus("degraded");
-                clearInterval(intervalId);
-                return;
-            }
-
+        (async () => {
             try {
-                const { Monster: fresh } = await api.getMonster(initialMonster.Id);
-                if (stoppedRef.current) return;
-
-                if (fresh.SpriteStatus === "ready") {
-                    stoppedRef.current = true;
-                    setMonster(fresh);
-                    setStatus("ready");
-                    clearInterval(intervalId);
-                } else if (fresh.SpriteStatus === "failed") {
-                    // don't stop yet — the server-side watchdog will keep
-                    // retrying in the background, so a "failed" snapshot
-                    // right now doesn't mean it's failed forever. Just keep
-                    // polling until it either recovers or we hit the timeout.
-                    setMonster(fresh);
+                // 1. старт (идемпотентный: StrictMode / повторный заход вернут тот же taskId)
+                let start;
+                for (let i = 0; i < 5; i++) {
+                    start = await api.startSprites(initialMonster.Id);
+                    if (start.status !== "busy") break;
+                    await sleep(1000);
+                    if (cancelled) return;
                 }
-            } catch (err) {
-                // transient network hiccup — ignore and try again next tick
-                console.error("sprite status poll failed:", err);
-            }
-        }, POLL_INTERVAL_MS);
+                if (cancelled) return;
 
-        return () => clearInterval(intervalId);
+                if (start.status === "ready") {
+                    setMonster(start.Monster);
+                    setStatus("ready");
+                    return;
+                }
+                if (!start.taskId) throw new Error("sprite task was not started");
+
+                // 2. поллим задачу
+                const deadline = Date.now() + POLL_TIMEOUT_MS;
+                while (!cancelled && Date.now() < deadline) {
+                    await sleep(POLL_INTERVAL_MS);
+                    if (cancelled) return;
+
+                    let task;
+                    try {
+                        task = await api.getTaskStatus(start.taskId);
+                    } catch (err) {
+                        console.error("sprite task poll failed:", err);
+                        continue; // временный сбой сети
+                    }
+
+                    // ⚠ подстрой под реальную форму ответа /api/task/:id
+                    setProgress(task.progress ?? 0);
+
+                    if (task.failed) throw new Error(task.error || "sprite generation failed");
+
+                    if (task.done) {
+                        const { Monster: fresh } = await api.getMonster(initialMonster.Id);
+                        if (cancelled) return;
+                        setMonster(fresh);
+                        setProgress(100);
+                        setStatus("ready");
+                        return;
+                    }
+                }
+                if (!cancelled) setStatus("degraded"); // таймаут
+            } catch (err) {
+                console.error("sprite generation error:", err);
+                if (!cancelled) setStatus("degraded");
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const sprites =
         status === "ready"
-            ? {
-                  idle: monster.SpriteIdleUrl,
-                  walk: monster.SpriteWalkUrl,
-                  hit: monster.SpriteHitUrl,
-              }
+            ? { idle: monster.SpriteIdleUrl, walk: monster.SpriteWalkUrl, hit: monster.SpriteHitUrl }
             : null;
-
     const staticUrl = monster.ThumbUrl || monster.ImageUrl;
 
-    return { status, monster, sprites, staticUrl };
+    return { status, monster, sprites, staticUrl, progress };
 }

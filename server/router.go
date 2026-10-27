@@ -33,6 +33,7 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	router.Handle("GET", "/api/monsters", mddlwr.RequireAuth(api.GetMonsters))
 	router.Handle("GET", "/api/swapomat", mddlwr.RequireAuth(api.GetSwapomat))
 	router.Handle("GET", "/api/monsters/:id", mddlwr.RequireAuth(api.GetMonster))
+	router.Handle("GET", "/api/sprites/:id", mddlwr.RequireAuth(api.StartSprites))
 	router.Handle("GET", "/api/counter", mddlwr.RequireAuth(api.GetCounter))
 	router.Handle("GET", "/api/products", mddlwr.RequireAuth(api.GetProducts))
 	router.Handle("POST", "/api/users/sync", mddlwr.RequireAuth(api.SyncUser))
@@ -40,6 +41,13 @@ func NewRouter(mddlwr *Middleware, api *api) *Router {
 	router.Handle("POST", "/api/prepare-monster-swap", mddlwr.RequireAuth(api.SwapMonster))
 	router.Handle("POST", "/api/create-payment", mddlwr.RequireAuth(api.CreatePayment))
 	router.Handle("PUT", "/api/purchases/:id", mddlwr.RequireAuth(api.OpenPurchase))
+
+	router.Handle("GET", "/api/games", mddlwr.RequireAuth(api.GetGames))
+	router.Handle("GET", "/api/games/stats", mddlwr.RequireAuth(api.GetGameStats))
+	router.Handle("GET", "/api/games/:game/leaderboard", mddlwr.RequireAuth(api.GetLeaderboard))
+	router.Handle("POST", "/api/games/:game/sessions", mddlwr.RequireAuth(api.StartGameSession))
+	router.Handle("POST", "/api/games/:game/sessions/:id/finish", mddlwr.RequireAuth(api.FinishGameSession))
+	router.Handle("GET", "/api/games/:game/history", mddlwr.RequireAuth(api.GetLeaderboardHistory))
 
 	router.Handle("GET", "/api/task/:id", mddlwr.RequireAuth(api.GetTaskStatus))
 	router.Handle("GET", "/api/mint/:id", mddlwr.RequireAuth(api.GetMintStatus))

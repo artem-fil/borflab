@@ -172,6 +172,52 @@ export default {
         });
     },
 
+    async startSprites(monsterId) {
+        return request(`/api/sprites/${monsterId}`, { timeout: 15000 });
+    },
+    // games
+
+    // Вставить в объект api рядом с getMonsters
+
+    async getGames() {
+        return request("/api/games");
+    },
+
+    // { Stats: { dodge: { Rank, Total, Primary, Metrics: {orbs, seconds} } } }
+    async getGameStats(monsterId) {
+        return request("/api/games/stats", { params: { monster_id: monsterId, _: Date.now() } });
+    },
+
+    // В объекте api: ЗАМЕНИ getLeaderboard и ДОБАВЬ getLeaderboardHistory
+
+    // period: week|month|year|all, size: full|compact, at: "YYYY-MM-DD" (любая дата внутри нужного периода)
+    async getLeaderboard(gameId, { period, metric, monsterId, size, at } = {}) {
+        return request(`/api/games/${gameId}/leaderboard`, {
+            params: { period, metric, monster_id: monsterId, size, at, _: Date.now() },
+        });
+    },
+
+    // Чемпион каждого периода. period: week|month|year; year — для week/month
+    async getLeaderboardHistory(gameId, { period, metric, year } = {}) {
+        return request(`/api/games/${gameId}/history`, {
+            params: { period, metric, year, _: Date.now() },
+        });
+    },
+
+    // → { SessionId, Seed }
+    async startGameSession(gameId, monsterId) {
+        return request(`/api/games/${gameId}/sessions`, { method: "POST", body: { monster_id: monsterId } });
+    },
+
+    // → { Record, Rank, Total }
+    async finishGameSession(gameId, sessionId, { metrics, moves }) {
+        return request(`/api/games/${gameId}/sessions/${sessionId}/finish`, {
+            method: "POST",
+            body: { metrics, moves },
+            timeout: 15000,
+        });
+    },
+
     async createPayment(body) {
         return request(`/api/create-payment/`, {
             method: "POST",

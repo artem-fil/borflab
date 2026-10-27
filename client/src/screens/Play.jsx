@@ -20,7 +20,7 @@ export default function Play() {
         }
     }, [initialMonster, navigate]);
 
-    const { status, monster, sprites, staticUrl } = useMonsterSprites(initialMonster);
+    const { status, monster, sprites, staticUrl, progress } = useMonsterSprites(initialMonster);
 
     if (!initialMonster) return null;
 
@@ -31,15 +31,14 @@ export default function Play() {
         return null;
     }
 
-    if (status === "loading") {
-        return <LoadingScreen />;
-    }
+    if (status === "loading") return <LoadingScreen monsterName={initialMonster.Name} progress={progress} />;
 
     return (
         <Game
             sprites={sprites}
             staticUrl={staticUrl}
             monsterName={monster.Name}
+            monsterId={monster.Id}
             onExit={() => navigate("/games", { state: { monster }, replace: true })}
         />
     );

@@ -11,9 +11,10 @@ import ruby from "@images/ruby.png";
 import sapphire from "@images/sapphire.png";
 import topaz from "@images/topaz.png";
 
-import bonappetit from "@images/bonappetit.jpg";
-import munchkinkombat from "@images/munchkinkombat.jpg";
+import dodge from "@images/dodge.jpg";
+import dodgeSm from "@images/dodge_sm.jpg";
 import needforfeed from "@images/needforfeed.jpg";
+import pacman from "@images/pacman.jpg";
 
 export const STONES = {
     Agate: {
@@ -146,27 +147,34 @@ export const PRODUCTS = {
     pack25: pack25,
 };
 
-export const GAMES = [
-    {
-        id: "dodge",
-        name: "Bon Appetit",
-        image: bonappetit,
-        description: "Dodge the bombs, grab the fruit.",
+export const GAMES = {
+    dodge: {
+        name: "Dodge",
+        image: dodge,
+        imageSm: dodgeSm,
+        description: "Dodge the bombs.",
         active: true,
     },
-    {
-        id: "munchkinkombat",
-        name: "Munchkin Kombat",
-        image: munchkinkombat,
+    /*
+    bonappetit: {
+        name: "Bon Appetit",
+        image: bonappetit,
+        imageSm: bonappetitSm,
+        description: "Grab the fruit.",
+        active: true,
+    },
+    */
+    pacman: {
+        name: "Pacman",
+        image: pacman,
         description: "Don't make me laugh.",
         active: false,
     },
-    {
-        id: "needforfeed",
+    needforfeed: {
         name: "Need for Feed",
         image: needforfeed,
         description: "Step on the gas. For the Family.",
         active: false,
     },
     // future games go here with active: false until they're built
-];
+};

@@ -9,6 +9,7 @@ import Gallery from "@screens/Gallery";
 import Games from "@screens/Games";
 import Home from "@screens/Home";
 import Lab from "@screens/Lab";
+import Leaderboard from "@screens/Leaderboard";
 import Library from "@screens/Library";
 import Play from "@screens/Play";
 import Policy from "@screens/Policy";
@@ -111,6 +112,7 @@ export default function App() {
         "/storage": "bg-black",
         "/games": "bg-[#ddcfb7]",
         "/dashboard": "bg-gray-900",
+        "/leaderboard": "bg-[#ddcfb7]",
     };
     const isDashboard = location.pathname === "/dashboard" || location.pathname === "/gallery";
 
@@ -172,9 +174,10 @@ export default function App() {
                 <Route path="/counter" element={<Counter />} />
                 <Route path="/policy" element={<Policy />} />
                 <Route path="/games" element={<Games />} />
+                <Route path="leaderboard" element={<Leaderboard />} />
                 <Route path="/play/:gameId" element={<Play />} />
                 <Route path="*" element={<Welcome />} />
-                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/admin" element={<Dashboard />} />
                 <Route path="/gallery" element={<Gallery />} />
             </Routes>
             {location.pathname !== "/welcome" &&

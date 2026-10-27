@@ -206,8 +206,8 @@ export default function Dashboard() {
     const stoneInsert = editedPrompt?.PromptStone?.[stone]?.[biome] ?? "";
     const analyzeTemplate = editedPrompt?.PromptAnalyze?.[biome] ?? "";
     const generationPrompt = editedPrompt?.PromptGeneration?.[biome] ?? "";
-    const mergedAnalyze = analyzeTemplate.includes("%s")
-        ? analyzeTemplate.replace("%s", stoneInsert)
+    const mergedAnalyze = analyzeTemplate.includes("%v")
+        ? analyzeTemplate.replace("%v", stoneInsert)
         : analyzeTemplate + "\n\n" + stoneInsert;
 
     return (

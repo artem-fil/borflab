@@ -1,4 +1,5 @@
 import monsterImg from "@images/monster.jpg";
+import { useWallets } from "@privy-io/react-auth/solana";
 import { useEffect, useRef, useState } from "react";
 import api from "../api.js";
 import { BIOMES, RARITIES, STONES } from "../config.js";
@@ -159,6 +160,15 @@ export default function SelectorsPanel({
     const [statusText, setStatusText] = useState("");
     const [result, setResult] = useState(null);
     const [error, setError] = useState(null);
+    const [activeWallet, setActiveWallet] = useState(null);
+    const { wallets } = useWallets();
+
+    useEffect(() => {
+        if (wallets?.length > 0) {
+            const stored = localStorage.getItem("primaryWallet");
+            setActiveWallet(wallets.find((w) => w.address === stored) || wallets[0]);
+        }
+    }, [wallets]);
 
     useEffect(() => {
         if (!photo) {
@@ -237,6 +247,7 @@ export default function SelectorsPanel({
             fd.append("biome", biome);
             fd.append("quality", quality);
             fd.append("size", size);
+            fd.append("userPubKey", activeWallet.address);
             const { Id: taskId } = await api.generate(fd);
             pollTask(taskId);
         } catch (e) {

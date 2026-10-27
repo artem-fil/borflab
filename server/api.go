@@ -43,6 +43,8 @@ const (
 	AVG_ANALYZE_TIME          = 13 // OpenAI vision call (gpt-4o)
 	AVG_GENERATE_TIME         = 20 // OpenAI image generation (gpt-image-1.5)
 	AVG_UPLOAD_TIME           = 7  // Pinata: image + metadata
+	AVG_SPRITE_GENERATE_TIME  = 27 // gpt-image sprite sheet
+	AVG_SPRITE_UPLOAD_TIME    = 3  // crop + 4 uploads to R2
 	AVG_MINT_TIME             = 17 // Solana tx confirmation (используется как таймаут-хинт)
 	spriteInlineMaxAttempts   = 3
 	spriteInlineBackoffBase   = 3 * time.Second // attempt N waits base * N
@@ -50,6 +52,7 @@ const (
 
 var (
 	tasks             sync.Map // taskId → *TaskStatus
+	spriteTasks       sync.Map
 	swapStatuses      sync.Map
 	mintStatuses      sync.Map // experimentId (string) → *MintStatus
 	totalPipelineTime = AVG_ANALYZE_TIME + AVG_GENERATE_TIME + AVG_UPLOAD_TIME
@@ -64,6 +67,11 @@ var (
 		Analyzed:  pct(AVG_ANALYZE_TIME),
 		Generated: pct(AVG_ANALYZE_TIME + AVG_GENERATE_TIME - 1),
 		Uploaded:  pct(AVG_ANALYZE_TIME + AVG_GENERATE_TIME + AVG_UPLOAD_TIME),
+		Finished:  100,
+	}
+	SP = struct{ Started, Generated, Finished int }{
+		Started:   2,
+		Generated: spritePct(AVG_SPRITE_GENERATE_TIME) - 1,
 		Finished:  100,
 	}
 )
@@ -773,6 +781,51 @@ func (a *api) AnalyzeSpecimen(w *Responder, r *http.Request) {
 	w.Send(struct{ Id string }{Id: taskID})
 }
 
+func (a *api) StartSprites(w *Responder, r *http.Request) {
+	ctx := r.Context()
+	claims, _ := Claims(r)
+
+	monster, err := a.db.SelectMonster(ctx, Param(r), claims.Id) // заодно проверка владельца
+	if err != nil {
+		a.DbError(w, err)
+		return
+	}
+
+	// 1. уже есть — отдаём как обычно
+	if monster.SpriteStatus == "ready" {
+		w.Send(map[string]any{"status": "ready", "Monster": monster})
+		return
+	}
+
+	// 2. уже генерируется — возвращаем тот же task
+	if raw, ok := spriteTasks.Load(monster.Id); ok {
+		w.Send(map[string]any{"status": "processing", "taskId": raw.(string)})
+		return
+	}
+
+	// 3. пробуем захватить
+	claimed, err := a.db.ClaimSpriteGeneration(ctx, monster.Id)
+	if err != nil {
+		a.DbError(w, err)
+		return
+	}
+	if !claimed {
+		// кто-то захватил долей секунды раньше и ещё не успел положить task в map
+		w.Send(map[string]any{"status": "busy"})
+		return
+	}
+
+	taskID := uuid.NewString()
+	ts := &TaskStatus{}
+	ts.SetStage(SP.Started, SP.Generated, AVG_SPRITE_GENERATE_TIME)
+	tasks.Store(taskID, ts)
+	spriteTasks.Store(monster.Id, taskID)
+
+	go a.generateSpritesheet(monster.Id, taskID)
+
+	w.Send(map[string]any{"status": "processing", "taskId": taskID})
+}
+
 func (a *api) processImage(taskId string, imgBytes []byte, experiment *Experiment, userPubKey string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -1011,16 +1064,18 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	if a.cfg.Environment == "dev" {
 		quality = "low"
 	} else {
-		quality = "medium"
+		quality = "high"
 	}
 
 	requestBody := map[string]any{
-		"model":      "gpt-image-1.5",
-		"n":          1,
-		"size":       "1024x1024",
-		"quality":    quality,
-		"prompt":     prompt,
-		"moderation": "low",
+		"model":         "gpt-image-2.5-flare",
+		"n":             1,
+		"size":          "1024x1024",
+		"background":    "transparent",
+		"output_format": "png",
+		"quality":       quality,
+		"prompt":        prompt,
+		"moderation":    "low",
 	}
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
@@ -1168,9 +1223,11 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 		Status:        "active",
 	}
 
-	if err := a.db.DecreaseStoneSparksTx(ctx, txDB, monster); err != nil {
-		fail("cannot decrease stone sparks", err)
-		return
+	if !experiment.IsTest {
+		if err := a.db.DecreaseStoneSparksTx(ctx, txDB, monster); err != nil {
+			fail("cannot decrease stone sparks", err)
+			return
+		}
 	}
 
 	if err := a.db.InsertMonsterTx(ctx, txDB, monster); err != nil {
@@ -1193,13 +1250,211 @@ func (a *api) generateImage(taskId string, specimen map[string]any, experiment E
 	)
 
 	go a.mintNFT(monster.Id, base64Image)
-	go a.generateSpritesheet(monster.Id, imageBytes)
+	// go a.generateSpritesheet(monster.Id, imageBytes)
 
 	ts.Finish(map[string]any{
 		"image":        experiment.ThumbUrl,
 		"experimentId": experiment.Id,
 		"monsterId":    monster.Id,
 	}, "")
+}
+
+func (a *api) generateSpritesheet(monsterId int, taskID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	defer spriteTasks.Delete(monsterId)
+
+	raw, _ := tasks.Load(taskID)
+	ts := raw.(*TaskStatus)
+
+	fail := func(msg string, err error) {
+		LogError("SpriteWorker", fmt.Sprintf("%s (monster %d)", msg, monsterId), err)
+		a.failSprite(ctx, monsterId)
+		ts.Fail(msg)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			fail(fmt.Sprintf("sprite panic: %v", r), fmt.Errorf("%v", r))
+		}
+	}()
+
+	monster, err := a.db.SelectMonsterById(ctx, monsterId)
+	if err != nil {
+		fail("cannot fetch monster", err)
+		return
+	}
+	experiment, err := a.db.SelectExperiment(ctx, strconv.Itoa(monster.ExperimentId))
+	if err != nil {
+		fail("cannot fetch experiment", err)
+		return
+	}
+	if experiment.ImageUrl == "" {
+		fail("monster has no image", nil)
+		return
+	}
+
+	// раньше сюда передавали полноразмерный imageBytes, поэтому качаем ImageUrl, а не thumb (400px)
+	srcBytes, err := downloadFile(ctx, experiment.ImageUrl)
+	if err != nil {
+		fail("cannot download source image", err)
+		return
+	}
+
+	sheet, err := a.requestSpriteSheetWithRetries(ctx, srcBytes, monsterId)
+	if err != nil {
+		fail("sprite generation failed", err)
+		return
+	}
+
+	ts.SetProgress(SP.Generated)
+	ts.SetStage(SP.Generated, SP.Finished, AVG_SPRITE_UPLOAD_TIME)
+
+	debugDir := ""
+	if a.cfg.Environment == "dev" {
+		debugDir = filepath.Join(os.TempDir(), "sprite-debug", experiment.UUID)
+		if err := os.MkdirAll(debugDir, 0755); err == nil {
+			_ = os.WriteFile(filepath.Join(debugDir, "raw_sheet.png"), sheet, 0644)
+		}
+	}
+
+	sprites, err := processAndCropSprites(sheet, 128, debugDir)
+	if err != nil {
+		fail("cannot crop sprites", err)
+		return
+	}
+
+	urls := map[string]string{}
+	for name, data := range map[string][]byte{
+		"idle": sprites.Idle, "walk": sprites.Walk, "hit": sprites.Hit, "avatar": sprites.Avatar,
+	} {
+		key := fmt.Sprintf("monsters/%s/sprites/%s.png", experiment.UUID, name)
+		if err := a.r2.Upload(ctx, key, "image/png", data); err != nil {
+			fail("cannot upload "+name+" sprite", err)
+			return
+		}
+		urls[name] = a.r2.URL(key)
+	}
+
+	// в SET должно быть sprite_status='ready', sprite_updated=now()
+	if err := a.db.UpdateMonsterSpritesSuccess(ctx, monsterId, urls["idle"], urls["walk"], urls["hit"], urls["avatar"]); err != nil {
+		fail("cannot save sprites", err)
+		return
+	}
+
+	LogInfo("SpriteWorker", fmt.Sprintf("Successfully processed sprites for monster %d", monsterId))
+	ts.Finish(map[string]any{"monsterId": monsterId}, "")
+}
+
+func (a *api) requestSpriteSheet(ctx context.Context, thumbBytes []byte) ([]byte, error) {
+	prompt := `You job is to convert the monster in the supplied image into a retro 32-bit-style pixel art on a transparent background. Important is to stay true to the original monster so it is 100% recognisable. Do not add any features.
+Preserve its appearance, anatomy, proportions, colours and distinctive features.
+Output is a spritesheet containing exactly 3 frames of equal width, arranged left to right with no overlap between frames.
+Left to right:
+1-IDLE — front-facing, visibly crouched low, body lowered, feet spread wider, ready to dodge.
+2-MOVE — the monster is jumping in the left direction.
+3-HIT — sitting on the ground, knocked out, visibly dizzy.
+ 
+Technical requirements:
+- Do not add text labels, borders, or frame dividers.
+- Background must be fully transparent (alpha channel), not white or checkered.
+- Each frame's canvas third must contain nothing but the monster — no ground line, no shadow, no props, no scenery, no text labels.
+- Center the monster within each frame's third, both horizontally and vertically, with roughly equal empty margin on all sides.
+- Keep the monster at the same scale (same maximum height in pixels) across all 3 frames.
+- Make each pose clearly distinguishable by silhouette, even at small size.
+- No text, props, scenery or added anatomical features.
+`
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	fields := map[string]string{
+		"model":         "gpt-image-1.5",
+		"prompt":        prompt,
+		"n":             "1",
+		"size":          "1536x1024",
+		"background":    "transparent",
+		"output_format": "png",
+	}
+	for k, v := range fields {
+		if err := writer.WriteField(k, v); err != nil {
+			return nil, fmt.Errorf("cannot write %s field: %w", k, err)
+		}
+	}
+
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="image"; filename="thumb.png"`)
+	h.Set("Content-Type", "image/png")
+
+	part, err := writer.CreatePart(h)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create form part: %w", err)
+	}
+	if _, err := part.Write(thumbBytes); err != nil {
+		return nil, fmt.Errorf("cannot write image bytes: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("cannot close multipart writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, OPENAI_EDITS_URL, body)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+a.cfg.OpenAIToken)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read openai response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openai generation failed: status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var parsedResp struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &parsedResp); err != nil || len(parsedResp.Data) == 0 {
+		return nil, fmt.Errorf("invalid openai image response: %w", err)
+	}
+
+	return base64.StdEncoding.DecodeString(parsedResp.Data[0].B64JSON)
+}
+
+// requestSpriteSheetWithRetries retries transient OpenAI failures inline
+// (timeouts, 5xx, rate limits) before giving up for this invocation. A
+// non-transient failure (e.g. bad thumb bytes) will just fail the same way
+// on every attempt and burn through the budget quickly, which is fine.
+func (a *api) requestSpriteSheetWithRetries(ctx context.Context, thumbBytes []byte, monsterId int) ([]byte, error) {
+	var lastErr error
+	for attempt := 1; attempt <= spriteInlineMaxAttempts; attempt++ {
+		sheet, err := a.requestSpriteSheet(ctx, thumbBytes)
+		if err == nil {
+			return sheet, nil
+		}
+		lastErr = err
+		LogError("SpriteWorker", fmt.Sprintf("attempt %d/%d failed for monster %d", attempt, spriteInlineMaxAttempts, monsterId), err)
+
+		if attempt == spriteInlineMaxAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(spriteInlineBackoffBase * time.Duration(attempt)):
+		}
+	}
+	return nil, lastErr
 }
 
 func (a *api) mintNFT(monsterId int, base64Image string) {
@@ -1424,221 +1679,6 @@ func (a *api) mintNFT(monsterId int, base64Image string) {
 	}
 
 	LogInfo("API", fmt.Sprintf("Transaction sent: %s", sig.String()))
-}
-
-func (a *api) generateSpritesheet(monsterId int, initialThumbBytes []byte) {
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	if err := a.db.UpdateMonsterSpriteStatus(ctx, monsterId, "processing"); err != nil {
-		LogError("SpriteWorker", fmt.Sprintf("cannot set processing status for monster %d", monsterId), err)
-		return
-	}
-
-	monster, err := a.db.SelectMonsterById(ctx, monsterId)
-	if err != nil {
-		LogError("SpriteWorker", fmt.Sprintf("cannot fetch monster %d", monsterId), err)
-		a.failSprite(ctx, monsterId)
-		return
-	}
-
-	experiment, err := a.db.SelectExperiment(ctx, strconv.Itoa(monster.ExperimentId))
-	if err != nil {
-		LogError("SpriteWorker", fmt.Sprintf("cannot fetch experiment for monster %d", monsterId), err)
-		a.failSprite(ctx, monsterId)
-		return
-	}
-
-	thumbBytes := initialThumbBytes
-	if len(thumbBytes) == 0 {
-		if experiment.ThumbUrl == "" {
-			LogError("SpriteWorker", fmt.Sprintf("monster %d has no thumb url", monsterId), nil)
-			a.failSprite(ctx, monsterId)
-			return
-		}
-		thumbBytes, err = downloadFile(ctx, experiment.ThumbUrl)
-		if err != nil {
-			LogError("SpriteWorker", "cannot download thumb image from r2", err)
-			a.failSprite(ctx, monsterId)
-			return
-		}
-	}
-
-	spriteSheetBytes, err := a.requestSpriteSheetWithRetries(ctx, thumbBytes, monsterId)
-	if err != nil {
-		LogError("SpriteWorker", "openai generation failed after retries", err)
-		a.failSprite(ctx, monsterId)
-		return
-	}
-
-	debugDir := ""
-	if a.cfg.Environment == "dev" {
-		debugDir = filepath.Join(os.TempDir(), "sprite-debug", experiment.UUID)
-		if err := os.MkdirAll(debugDir, 0755); err == nil {
-			_ = os.WriteFile(filepath.Join(debugDir, "raw_sheet.png"), spriteSheetBytes, 0644)
-		} else {
-			LogError("SpriteWorker", "cannot create debug dir", err)
-		}
-	}
-
-	sprites, err := processAndCropSprites(spriteSheetBytes, 128, debugDir)
-	if err != nil {
-		LogError("SpriteWorker", "cannot crop sprites", err)
-		a.failSprite(ctx, monsterId)
-		return
-	}
-
-	idleKey := fmt.Sprintf("monsters/%s/sprites/idle.png", experiment.UUID)
-	walkKey := fmt.Sprintf("monsters/%s/sprites/walk.png", experiment.UUID)
-	hitKey := fmt.Sprintf("monsters/%s/sprites/hit.png", experiment.UUID)
-	avatarKey := fmt.Sprintf("monsters/%s/sprites/avatar.png", experiment.UUID)
-
-	if err := a.r2.Upload(ctx, idleKey, "image/png", sprites.Idle); err != nil {
-		LogError("SpriteWorker", "failed to upload idle sprite", err)
-		a.failSprite(ctx, monsterId)
-		return
-	}
-	if err := a.r2.Upload(ctx, walkKey, "image/png", sprites.Walk); err != nil {
-		LogError("SpriteWorker", "failed to upload walk sprite", err)
-		a.failSprite(ctx, monsterId)
-		return
-	}
-	if err := a.r2.Upload(ctx, hitKey, "image/png", sprites.Hit); err != nil {
-		LogError("SpriteWorker", "failed to upload hit sprite", err)
-		a.failSprite(ctx, monsterId)
-		return
-	}
-	if err := a.r2.Upload(ctx, avatarKey, "image/png", sprites.Avatar); err != nil {
-		LogError("SpriteWorker", "failed to upload avatar sprite", err)
-		a.failSprite(ctx, monsterId)
-		return
-	}
-
-	idleUrl := a.r2.URL(idleKey)
-	walkUrl := a.r2.URL(walkKey)
-	hitUrl := a.r2.URL(hitKey)
-	avatarUrl := a.r2.URL(avatarKey)
-
-	// NOTE: UpdateMonsterSpritesSuccess's SET clause should include
-	// `sprite_updated = now()` alongside sprite_status = 'ready'.
-	if err := a.db.UpdateMonsterSpritesSuccess(ctx, monsterId, idleUrl, walkUrl, hitUrl, avatarUrl); err != nil {
-		LogError("SpriteWorker", fmt.Sprintf("cannot update sprite status for monster %d", monsterId), err)
-		return
-	}
-
-	LogInfo("SpriteWorker", fmt.Sprintf("Successfully processed sprites for monster %d", monsterId))
-}
-
-func (a *api) requestSpriteSheet(ctx context.Context, thumbBytes []byte) ([]byte, error) {
-	prompt := `You job is to convert the monster in the supplied image into a retro 32-bit-style pixel art on a transparent background. Important is to stay true to the original monster so it is 100% recognisable. Do not add any features.
-Preserve its appearance, anatomy, proportions, colours and distinctive features.
-Output is a spritesheet containing exactly 3 frames of equal width, arranged left to right with no overlap between frames.
-Left to right:
-1-IDLE — front-facing, visibly crouched low, body lowered, feet spread wider, ready to dodge.
-2-MOVE — the monster is jumping in the left direction.
-3-HIT — sitting on the ground, knocked out, visibly dizzy.
- 
-Technical requirements:
-- Do not add text labels, borders, or frame dividers.
-- Background must be fully transparent (alpha channel), not white or checkered.
-- Each frame's canvas third must contain nothing but the monster — no ground line, no shadow, no props, no scenery, no text labels.
-- Center the monster within each frame's third, both horizontally and vertically, with roughly equal empty margin on all sides.
-- Keep the monster at the same scale (same maximum height in pixels) across all 3 frames.
-- Make each pose clearly distinguishable by silhouette, even at small size.
-- No text, props, scenery or added anatomical features.
-`
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	fields := map[string]string{
-		"model":         "gpt-image-1.5",
-		"prompt":        prompt,
-		"n":             "1",
-		"size":          "1536x1024",
-		"background":    "transparent",
-		"output_format": "png",
-	}
-	for k, v := range fields {
-		if err := writer.WriteField(k, v); err != nil {
-			return nil, fmt.Errorf("cannot write %s field: %w", k, err)
-		}
-	}
-
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", `form-data; name="image"; filename="thumb.png"`)
-	h.Set("Content-Type", "image/png")
-
-	part, err := writer.CreatePart(h)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create form part: %w", err)
-	}
-	if _, err := part.Write(thumbBytes); err != nil {
-		return nil, fmt.Errorf("cannot write image bytes: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("cannot close multipart writer: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, OPENAI_EDITS_URL, body)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create request: %w", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+a.cfg.OpenAIToken)
-
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("openai request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("cannot read openai response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openai generation failed: status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var parsedResp struct {
-		Data []struct {
-			B64JSON string `json:"b64_json"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(respBody, &parsedResp); err != nil || len(parsedResp.Data) == 0 {
-		return nil, fmt.Errorf("invalid openai image response: %w", err)
-	}
-
-	return base64.StdEncoding.DecodeString(parsedResp.Data[0].B64JSON)
-}
-
-// requestSpriteSheetWithRetries retries transient OpenAI failures inline
-// (timeouts, 5xx, rate limits) before giving up for this invocation. A
-// non-transient failure (e.g. bad thumb bytes) will just fail the same way
-// on every attempt and burn through the budget quickly, which is fine.
-func (a *api) requestSpriteSheetWithRetries(ctx context.Context, thumbBytes []byte, monsterId int) ([]byte, error) {
-	var lastErr error
-	for attempt := 1; attempt <= spriteInlineMaxAttempts; attempt++ {
-		sheet, err := a.requestSpriteSheet(ctx, thumbBytes)
-		if err == nil {
-			return sheet, nil
-		}
-		lastErr = err
-		LogError("SpriteWorker", fmt.Sprintf("attempt %d/%d failed for monster %d", attempt, spriteInlineMaxAttempts, monsterId), err)
-
-		if attempt == spriteInlineMaxAttempts {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(spriteInlineBackoffBase * time.Duration(attempt)):
-		}
-	}
-	return nil, lastErr
 }
 
 func (a *api) failSprite(ctx context.Context, monsterId int) {
@@ -2291,7 +2331,13 @@ func (a *api) GenerateTest(w *Responder, r *http.Request) {
 		return
 	}
 
-	go a.processImage(taskID, analysisImg, insertedExperiment, "dfgdfg")
+	userPubKey := r.FormValue("userPubKey")
+	if userPubKey == "" {
+		a.BadRequestError(w, fmt.Errorf("userPubKey is required"))
+		return
+	}
+
+	go a.processImage(taskID, analysisImg, insertedExperiment, userPubKey)
 
 	w.Send(struct{ Id string }{Id: taskID})
 }
@@ -2545,4 +2591,8 @@ func pct(elapsedSeconds int) int {
 		return 100
 	}
 	return v
+}
+
+func spritePct(sec int) int {
+	return sec * 100 / (AVG_SPRITE_GENERATE_TIME + AVG_SPRITE_UPLOAD_TIME)
 }
